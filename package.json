@@ -13,8 +13,12 @@
       "require": "./dist/index.cjs"
     }
   },
+  "bin": {
+    "mock-agent": "./bin/mock-agent.mjs"
+  },
   "files": [
-    "dist"
+    "dist",
+    "bin"
   ],
   "scripts": {
     "build": "tsup",

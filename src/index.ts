@@ -3,3 +3,8 @@ export function helloWorld(name?: string): string {
   return `Hello, ${who}!`;
 }
 
+export * from "./local-runtime.js";
+export * from "./protocol.js";
+export * from "./framing.js";
+export * from "./stdio-transport.js";
+
