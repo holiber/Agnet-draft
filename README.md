@@ -1,4 +1,6 @@
-<img width="1536" height="1024" alt="Agnet logo" src="media/agnet-logo.png" />
+<p align="center">
+  <img alt="Agnet logo" src="media/agnet-logo.png" />
+</p>
 
 # Agnet
 A network for your AI agents
