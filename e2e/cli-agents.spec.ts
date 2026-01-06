@@ -1,6 +1,8 @@
 import { test, expect } from "@playwright/test";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import os from "node:os";
+import { mkdtemp, writeFile } from "node:fs/promises";
 
 type RunResult = { code: number; stdout: string; stderr: string };
 
@@ -88,5 +90,76 @@ test("agents invoke errors on unknown skill", async () => {
   const res = await runCli(["agents", "invoke", "--skill", "nope", "--prompt", "x"]);
   expect(res.code).toBeGreaterThan(0);
   expect(res.stderr).toContain("Unknown skill");
+});
+
+test("agents register supports inline JSON and persists per-cwd", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "agentinterop-e2e-"));
+  const mockAgentPath = path.join(process.cwd(), "bin", "mock-agent.mjs");
+
+  const config = {
+    agent: {
+      id: "registered-foo",
+      name: "Registered Foo",
+      version: "1.0.0",
+      skills: [{ id: "chat" }],
+      auth: { kind: "bearer", header: "Authorization" }
+    },
+    runtime: {
+      transport: "cli",
+      command: process.execPath,
+      args: [mockAgentPath]
+    }
+  };
+
+  const reg = await runCli(
+    [
+      "agents",
+      "register",
+      "--json",
+      JSON.stringify(config),
+      "--bearer-env",
+      "OPENAI_API_KEY"
+    ],
+    { cwd, env: { OPENAI_API_KEY: "dont-store-me" } }
+  );
+  expect(reg.code).toBe(0);
+  expect(JSON.parse(reg.stdout)).toEqual({ ok: true, agentId: "registered-foo" });
+
+  const listed = await runCli(["agents", "list", "--json"], { cwd });
+  expect(listed.code).toBe(0);
+  const parsed = JSON.parse(listed.stdout) as { agents: Array<{ id: string }> };
+  expect(parsed.agents.map((a) => a.id)).toContain("registered-foo");
+
+  const described = await runCli(["agents", "describe", "registered-foo", "--json"], { cwd });
+  expect(described.code).toBe(0);
+  const desc = JSON.parse(described.stdout) as { agent: { id: string; name: string } };
+  expect(desc.agent.id).toBe("registered-foo");
+  expect(desc.agent.name).toBe("Registered Foo");
+
+  const invoked = await runCli(
+    ["agents", "invoke", "--agent", "registered-foo", "--skill", "chat", "--prompt", "hello"],
+    { cwd }
+  );
+  expect(invoked.code).toBe(0);
+  expect(invoked.stdout).toBe("MockAgent response #1: hello\n");
+});
+
+test("agents register supports --file", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "agentinterop-e2e-"));
+  const mockAgentPath = path.join(process.cwd(), "bin", "mock-agent.mjs");
+
+  const configPath = path.join(cwd, "agent.json");
+  await writeFile(
+    configPath,
+    JSON.stringify({
+      agent: { id: "from-file", name: "From File", version: "1.0.0", skills: [{ id: "chat" }] },
+      runtime: { transport: "cli", command: process.execPath, args: [mockAgentPath] }
+    }),
+    "utf-8"
+  );
+
+  const reg = await runCli(["agents", "register", "--file", configPath], { cwd });
+  expect(reg.code).toBe(0);
+  expect(JSON.parse(reg.stdout)).toEqual({ ok: true, agentId: "from-file" });
 });
 

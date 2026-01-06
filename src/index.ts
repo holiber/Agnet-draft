@@ -3,6 +3,7 @@ export function helloWorld(name?: string): string {
   return `Hello, ${who}!`;
 }
 
+export * from "./agent-interop.js";
 export * from "./local-runtime.js";
 export * from "./protocol.js";
 export * from "./framing.js";

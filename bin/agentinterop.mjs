@@ -31,6 +31,11 @@ AgentInterop CLI
 Usage:
   agentinterop agents list [--json]
   agentinterop agents describe <agentId> [--json]
+  agentinterop agents register --file <path>
+  agentinterop agents register --json <inlineJson>
+    [--bearer-env <ENV_VAR>]
+    [--api-key-env <ENV_VAR>]
+    [--header-env "<Header-Name>=<ENV_VAR>"] (repeatable)
   agentinterop agents invoke --skill <skill> --prompt <text> [--agent <agentId>]
   agentinterop agents session open [--agent <agentId>] [--skill <skill>]
   agentinterop agents session send --session <sessionId> --prompt <text>
@@ -38,6 +43,7 @@ Usage:
 
 Notes:
   - The built-in demo agent is "mock-agent".
+  - Registered agents are persisted to ./.cache/agentinterop/agents.json (safe: no secrets).
   - Skills are currently informational; the mock agent supports a single chat-like interaction.
 `.trim();
 }
@@ -46,6 +52,20 @@ function parseArgs(argv) {
   const positional = [];
   /** @type {Record<string, string | boolean>} */
   const flags = {};
+
+  const setFlag = (k, v) => {
+    const existing = flags[k];
+    if (existing === undefined) {
+      flags[k] = v;
+      return;
+    }
+    // Support repeatable flags by collecting values.
+    if (Array.isArray(existing)) {
+      existing.push(v);
+      return;
+    }
+    flags[k] = [existing, v];
+  };
 
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
@@ -58,15 +78,15 @@ function parseArgs(argv) {
       if (eq !== -1) {
         const k = a.slice(2, eq);
         const v = a.slice(eq + 1);
-        flags[k] = v;
+        setFlag(k, v);
       } else {
         const k = a.slice(2);
         const next = argv[i + 1];
         if (next && !next.startsWith("--")) {
-          flags[k] = next;
+          setFlag(k, next);
           i++;
         } else {
-          flags[k] = true;
+          setFlag(k, true);
         }
       }
       continue;
@@ -336,20 +356,126 @@ function getBuiltInAgents() {
   const mockAgentPath = path.join(here, "mock-agent.mjs");
   return [
     {
-      id: "mock-agent",
-      name: "Mock Agent",
-      description: "Deterministic, stdio-driven mock agent for tests",
-      command: process.execPath,
-      args: [mockAgentPath]
+      agent: {
+        id: "mock-agent",
+        name: "Mock Agent",
+        version: "0.0.0",
+        description: "Deterministic, stdio-driven mock agent for tests",
+        skills: [
+          {
+            id: "chat",
+            description: "Chat-style interaction over session/start + session/send"
+          }
+        ]
+      },
+      runtime: {
+        transport: "cli",
+        command: process.execPath,
+        args: [mockAgentPath]
+      }
     }
   ];
 }
 
-function resolveAgent(agentId) {
-  const agents = getBuiltInAgents();
-  const found = agents.find((a) => a.id === agentId);
+function agentsRegistryPath() {
+  return path.join(process.cwd(), ".cache", "agentinterop", "agents.json");
+}
+
+async function readAgentsRegistry() {
+  try {
+    const raw = await readFile(agentsRegistryPath(), "utf-8");
+    const parsed = JSON.parse(raw);
+    const agents = Array.isArray(parsed?.agents) ? parsed.agents : [];
+    return { version: 1, agents };
+  } catch {
+    return { version: 1, agents: [] };
+  }
+}
+
+async function writeAgentsRegistry(agents) {
+  await mkdir(path.dirname(agentsRegistryPath()), { recursive: true });
+  await writeFile(
+    agentsRegistryPath(),
+    JSON.stringify({ version: 1, agents }, null, 2) + "\n",
+    "utf-8"
+  );
+}
+
+function requireRecord(value, p) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`Invalid AgentConfig at "${p}": expected object`);
+  }
+  return value;
+}
+
+function requireNonEmptyString(value, p) {
+  if (typeof value !== "string") throw new Error(`Invalid AgentConfig at "${p}": expected string`);
+  if (value.trim().length === 0) {
+    throw new Error(`Invalid AgentConfig at "${p}": expected non-empty string`);
+  }
+  return value;
+}
+
+function requireArray(value, p) {
+  if (!Array.isArray(value)) throw new Error(`Invalid AgentConfig at "${p}": expected array`);
+  return value;
+}
+
+function validateAgentConfig(value) {
+  const obj = requireRecord(value, "$");
+  const agent = requireRecord(obj.agent, "agent");
+  requireNonEmptyString(agent.id, "agent.id");
+  requireNonEmptyString(agent.name, "agent.name");
+  requireNonEmptyString(agent.version, "agent.version");
+  const skills = requireArray(agent.skills, "agent.skills");
+  if (skills.length === 0) throw new Error(`Invalid AgentConfig at "agent.skills": expected non-empty array`);
+  for (let i = 0; i < skills.length; i++) {
+    const s = requireRecord(skills[i], `agent.skills[${i}]`);
+    requireNonEmptyString(s.id, `agent.skills[${i}].id`);
+  }
+
+  const runtime = requireRecord(obj.runtime, "runtime");
+  const transport = requireNonEmptyString(runtime.transport, "runtime.transport");
+  if (transport === "cli") {
+    requireNonEmptyString(runtime.command, "runtime.command");
+    if (runtime.args !== undefined) {
+      const args = requireArray(runtime.args, "runtime.args");
+      for (let i = 0; i < args.length; i++) {
+        requireNonEmptyString(args[i], `runtime.args[${i}]`);
+      }
+    }
+  } else if (transport === "http") {
+    requireNonEmptyString(runtime.baseUrl, "runtime.baseUrl");
+  } else if (transport === "ipc") {
+    requireNonEmptyString(runtime.socketPath, "runtime.socketPath");
+  } else {
+    throw new Error(`Invalid AgentConfig at "runtime.transport": unknown transport "${transport}"`);
+  }
+
+  if (obj.authRef !== undefined) {
+    const ref = requireRecord(obj.authRef, "authRef");
+    if (ref.bearerEnv !== undefined) requireNonEmptyString(ref.bearerEnv, "authRef.bearerEnv");
+    if (ref.apiKeyEnv !== undefined) requireNonEmptyString(ref.apiKeyEnv, "authRef.apiKeyEnv");
+    if (ref.headerEnv !== undefined) {
+      const hdr = requireRecord(ref.headerEnv, "authRef.headerEnv");
+      for (const [k, v] of Object.entries(hdr)) {
+        requireNonEmptyString(v, `authRef.headerEnv.${k}`);
+      }
+    }
+  }
+
+  return obj;
+}
+
+async function resolveAgent(agentId) {
+  const builtins = getBuiltInAgents();
+  const builtInFound = builtins.find((a) => a.agent.id === agentId);
+  if (builtInFound) return builtInFound;
+
+  const registry = await readAgentsRegistry();
+  const found = registry.agents.find((a) => a?.agent?.id === agentId);
   if (!found) fail(`Unknown agent: ${agentId}`);
-  return found;
+  return validateAgentConfig(found);
 }
 
 function sessionsDir() {
@@ -375,11 +501,15 @@ async function writeSession(sessionId, data) {
 }
 
 async function cmdAgentsList(flags) {
-  const agents = getBuiltInAgents().map((a) => ({
-    id: a.id,
-    name: a.name,
-    description: a.description
-  }));
+  const registry = await readAgentsRegistry();
+  const agents = [...getBuiltInAgents(), ...registry.agents.map((a) => validateAgentConfig(a))]
+    .map((a) => ({
+      id: a.agent.id,
+      name: a.agent.name,
+      description: a.agent.description
+    }))
+    // Stable ordering for tests and scripts.
+    .sort((x, y) => x.id.localeCompare(y.id));
   // Default output is JSON for stable scripting and tests.
   if (!boolFlag(flags, "json") && flags.json !== undefined) {
     // `--json=false` is accepted but still prints JSON (reserved for future formats).
@@ -391,18 +521,8 @@ async function cmdAgentsDescribe(positional, flags) {
   const agentId = positional[2];
   if (!agentId) fail(`Missing <agentId>\n\n${usage()}`);
 
-  const agent = resolveAgent(agentId);
-  const description = {
-    id: agent.id,
-    name: agent.name,
-    description: agent.description,
-    skills: [
-      {
-        id: "chat",
-        description: "Chat-style interaction over session/start + session/send"
-      }
-    ]
-  };
+  const registered = await resolveAgent(agentId);
+  const description = registered.agent;
   // Default output is JSON for stable scripting and tests.
   if (!boolFlag(flags, "json") && flags.json !== undefined) {
     // `--json=false` is accepted but still prints JSON (reserved for future formats).
@@ -410,10 +530,75 @@ async function cmdAgentsDescribe(positional, flags) {
   process.stdout.write(JSON.stringify({ agent: description }, null, 2) + "\n");
 }
 
+function parseHeaderEnv(flags) {
+  const v = flags["header-env"];
+  const items = Array.isArray(v) ? v : v ? [v] : [];
+  /** @type {Record<string, string>} */
+  const out = {};
+  for (const item of items) {
+    if (typeof item !== "string") continue;
+    const eq = item.indexOf("=");
+    if (eq === -1) fail(`Invalid --header-env "${item}" (expected "Header=ENV_VAR")`);
+    const header = item.slice(0, eq).trim();
+    const envVar = item.slice(eq + 1).trim();
+    if (!header || !envVar) fail(`Invalid --header-env "${item}" (expected "Header=ENV_VAR")`);
+    out[header] = envVar;
+  }
+  return out;
+}
+
+async function cmdAgentsRegister(flags) {
+  const file = strFlag(flags, "file");
+  const json = strFlag(flags, "json");
+  if (!file && !json) fail(`Missing --file or --json\n\n${usage()}`);
+  if (file && json) fail(`Use only one of --file or --json\n\n${usage()}`);
+
+  let parsed;
+  try {
+    const raw = file ? await readFile(file, "utf-8") : json;
+    parsed = JSON.parse(raw);
+  } catch (err) {
+    fail(`Failed to parse JSON: ${err?.message ?? String(err)}`);
+  }
+
+  let config;
+  try {
+    config = validateAgentConfig(parsed);
+  } catch (err) {
+    fail(err?.message ?? String(err));
+  }
+
+  // Persist non-secret auth references (env var names) if provided.
+  const bearerEnv = strFlag(flags, "bearer-env");
+  const apiKeyEnv = strFlag(flags, "api-key-env");
+  const headerEnv = parseHeaderEnv(flags);
+  if (bearerEnv || apiKeyEnv || Object.keys(headerEnv).length > 0) {
+    config.authRef = {
+      ...(config.authRef ?? {}),
+      ...(bearerEnv ? { bearerEnv } : {}),
+      ...(apiKeyEnv ? { apiKeyEnv } : {}),
+      ...(Object.keys(headerEnv).length > 0 ? { headerEnv: { ...(config.authRef?.headerEnv ?? {}), ...headerEnv } } : {})
+    };
+  }
+
+  const registry = await readAgentsRegistry();
+  const next = registry.agents.filter((a) => a?.agent?.id !== config.agent.id);
+  next.push(config);
+  await writeAgentsRegistry(next);
+
+  process.stdout.write(JSON.stringify({ ok: true, agentId: config.agent.id }, null, 2) + "\n");
+}
+
 async function runOneShotChat({ agentId, prompt }) {
-  const agent = resolveAgent(agentId);
+  const agent = await resolveAgent(agentId);
+  if (agent.runtime.transport !== "cli") {
+    fail(`Agent "${agentId}" does not support local CLI transport`);
+  }
   const sessionId = randomId("invoke");
-  const conn = spawnLocalAgent({ command: agent.command, args: agent.args });
+  const conn = spawnLocalAgent({
+    command: agent.runtime.command,
+    args: Array.isArray(agent.runtime.args) ? agent.runtime.args : []
+  });
   try {
     const iter = conn.transport[Symbol.asyncIterator]();
     await waitForType(iter, "ready");
@@ -467,8 +652,14 @@ async function cmdSessionSend(flags) {
   const skill = sess.skill ?? "chat";
   if (skill !== "chat") fail(`Unknown skill: ${skill}`);
 
-  const agent = resolveAgent(agentId);
-  const conn = spawnLocalAgent({ command: agent.command, args: agent.args });
+  const agent = await resolveAgent(agentId);
+  if (agent.runtime.transport !== "cli") {
+    fail(`Agent "${agentId}" does not support local CLI transport`);
+  }
+  const conn = spawnLocalAgent({
+    command: agent.runtime.command,
+    args: Array.isArray(agent.runtime.args) ? agent.runtime.args : []
+  });
   try {
     const iter = conn.transport[Symbol.asyncIterator]();
     await waitForType(iter, "ready");
@@ -520,6 +711,7 @@ async function main() {
 
   if (resource === "list") return cmdAgentsList(flags);
   if (resource === "describe") return cmdAgentsDescribe(positional, flags);
+  if (resource === "register") return cmdAgentsRegister(flags);
   if (resource === "invoke") return cmdAgentsInvoke(flags);
 
   if (resource === "session") {
