@@ -1,8 +1,13 @@
 import { readFileSync } from "node:fs";
 
 import type { JsonObject } from "./protocol.js";
+import { parseAgentMdx } from "./agent-mdx.js";
 
 export type AuthKind = "none" | "bearer" | "apiKey";
+
+export interface AgentMcpRequirement {
+  tools: string[];
+}
 
 export interface AgentAuthRequirement {
   kind: AuthKind;
@@ -20,17 +25,33 @@ export interface AgentSkill {
   description?: string;
 }
 
+export interface AgentRule {
+  id: string;
+  text: string;
+}
+
 export interface AgentCard {
   id: string;
   name: string;
   version: string;
   description?: string;
   skills: AgentSkill[];
+  rules?: AgentRule[];
+  /**
+   * Declares tool requirements only (no secrets).
+   * Tier1: currently informational.
+   */
+  mcp?: AgentMcpRequirement;
   /**
    * Declares required auth *shape* only (no secrets).
    * Secrets are injected via RegisterOptions at registration time.
    */
   auth?: AgentAuthRequirement;
+  /**
+   * Escape hatch for Tier1 extensions (A2A-aligned).
+   * `.agent.mdx` uses this for `systemPrompt` storage.
+   */
+  extensions?: JsonObject;
 }
 
 export type AgentRuntimeConfig =
@@ -143,6 +164,27 @@ export function validateAgentCard(value: unknown, path = "agent"): AgentCard {
     };
   });
 
+  let rules: AgentRule[] | undefined;
+  if (obj.rules !== undefined) {
+    const rulesRaw = requireArray(obj.rules, `${path}.rules`);
+    rules = rulesRaw.map((r, i) => {
+      const ruleObj = requireRecord(r, `${path}.rules[${i}]`);
+      return {
+        id: requireNonEmptyString(ruleObj.id, `${path}.rules[${i}].id`),
+        text: requireNonEmptyString(ruleObj.text, `${path}.rules[${i}].text`)
+      };
+    });
+  }
+
+  let mcp: AgentMcpRequirement | undefined;
+  if (obj.mcp !== undefined) {
+    const mcpObj = requireRecord(obj.mcp, `${path}.mcp`);
+    const toolsRaw = requireArray(mcpObj.tools, `${path}.mcp.tools`);
+    mcp = {
+      tools: toolsRaw.map((t, i) => requireNonEmptyString(t, `${path}.mcp.tools[${i}]`))
+    };
+  }
+
   let auth: AgentAuthRequirement | undefined;
   if (obj.auth !== undefined) {
     const authObj = requireRecord(obj.auth, `${path}.auth`);
@@ -156,7 +198,13 @@ export function validateAgentCard(value: unknown, path = "agent"): AgentCard {
     };
   }
 
-  return { id, name, version, description, skills, auth };
+  let extensions: JsonObject | undefined;
+  if (obj.extensions !== undefined) {
+    if (!isObject(obj.extensions)) throw pathError(`${path}.extensions`, "expected object");
+    extensions = obj.extensions as JsonObject;
+  }
+
+  return { id, name, version, description, skills, rules, mcp, auth, extensions };
 }
 
 export function validateAgentRuntimeConfig(
@@ -290,6 +338,11 @@ export class AgentInterop {
   register(input: AgentRegistrationInput, opts: RegisterOptions = {}): RegisteredAgentRef {
     if (typeof input === "string") {
       const raw = readFileSync(input, "utf-8");
+      if (input.toLowerCase().endsWith(".agent.mdx")) {
+        const config = parseAgentMdx(raw, { path: input });
+        return this.register(config, opts);
+      }
+
       let parsed: unknown;
       try {
         parsed = JSON.parse(raw) as unknown;
@@ -339,6 +392,10 @@ export class AgentInterop {
 
   list(): RegisteredAgentRef[] {
     return [...this.byId.values()];
+  }
+
+  listAgents(): AgentCard[] {
+    return this.list().map((r) => r.card);
   }
 }
 

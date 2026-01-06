@@ -15,6 +15,7 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 import process from "node:process";
 import { TextDecoder, TextEncoder } from "node:util";
+import { parse as parseYaml } from "yaml";
 
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder("utf-8", { fatal: false });
@@ -31,7 +32,8 @@ AgentInterop CLI
 Usage:
   agentinterop agents list [--json]
   agentinterop agents describe <agentId> [--json]
-  agentinterop agents register --file <path>
+  agentinterop agents register --files <path> [<path> ...]
+  agentinterop agents register --file <path> (deprecated; use --files)
   agentinterop agents register --json <inlineJson>
     [--bearer-env <ENV_VAR>]
     [--api-key-env <ENV_VAR>]
@@ -81,6 +83,19 @@ function parseArgs(argv) {
         setFlag(k, v);
       } else {
         const k = a.slice(2);
+        if (k === "files") {
+          // Special-case: --files accepts multiple paths until the next flag.
+          let consumed = 0;
+          for (let j = i + 1; j < argv.length; j++) {
+            const next = argv[j];
+            if (!next || next.startsWith("--")) break;
+            setFlag(k, next);
+            consumed++;
+          }
+          if (consumed === 0) setFlag(k, true);
+          i += consumed;
+          continue;
+        }
         const next = argv[i + 1];
         if (next && !next.startsWith("--")) {
           setFlag(k, next);
@@ -467,6 +482,224 @@ function validateAgentConfig(value) {
   return obj;
 }
 
+function collapseWs(s) {
+  return s.trim().replace(/\s+/g, " ");
+}
+
+function normalizeSectionId(raw) {
+  const s = String(raw ?? "").trim().toLowerCase();
+  return s
+    .replace(/['’]/g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/-+/g, "-")
+    .replace(/^-|-$/g, "");
+}
+
+function mdxFail(filePath, message) {
+  throw new Error(`Invalid .agent.mdx at "${filePath}": ${message}`);
+}
+
+function extractFrontmatter(raw, filePath) {
+  const normalized = String(raw ?? "").replace(/\r\n/g, "\n");
+  if (!normalized.startsWith("---\n")) mdxFail(filePath, "missing required YAML frontmatter (expected starting '---')");
+
+  const lines = normalized.split("\n");
+  let end = -1;
+  for (let i = 1; i < lines.length; i++) {
+    if (lines[i].trim() === "---") {
+      end = i;
+      break;
+    }
+  }
+  if (end === -1) mdxFail(filePath, "unterminated frontmatter (missing closing '---')");
+  return { frontmatter: lines.slice(1, end).join("\n"), body: lines.slice(end + 1).join("\n") };
+}
+
+function parseHeadings(markdown) {
+  const lines = String(markdown ?? "").replace(/\r\n/g, "\n").split("\n");
+  /** @type {Array<{level:number;text:string;line:number}>} */
+  const out = [];
+
+  let inFence = false;
+  let fenceMarker = null;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const trimmed = line.trimStart();
+    const fenceMatch = /^(~~~|```)/.exec(trimmed);
+    if (fenceMatch) {
+      const marker = fenceMatch[1];
+      if (!inFence) {
+        inFence = true;
+        fenceMarker = marker;
+      } else if (fenceMarker === marker) {
+        inFence = false;
+        fenceMarker = null;
+      }
+      continue;
+    }
+    if (inFence) continue;
+
+    const m = /^(#{1,6})\s+(.+?)\s*$/.exec(trimmed);
+    if (!m) continue;
+    out.push({ level: m[1].length, text: m[2], line: i + 1 });
+  }
+  return out;
+}
+
+function sliceSection(lines, startIdx, endIdx) {
+  const chunk = lines.slice(startIdx, endIdx);
+  while (chunk.length > 0 && chunk[0].trim() === "") chunk.shift();
+  while (chunk.length > 0 && chunk[chunk.length - 1].trim() === "") chunk.pop();
+  return chunk.join("\n").trimEnd();
+}
+
+function parseSubsections(sectionMarkdown, filePath, sectionName) {
+  const lines = String(sectionMarkdown ?? "").replace(/\r\n/g, "\n").split("\n");
+  const headings = parseHeadings(sectionMarkdown).filter((h) => h.level === 3);
+  if (headings.length === 0) return [];
+
+  const seen = new Set();
+  const out = [];
+  for (let i = 0; i < headings.length; i++) {
+    const h = headings[i];
+    const next = headings[i + 1];
+    const rawId = String(h.text ?? "").trim();
+    const normalizedId = normalizeSectionId(rawId);
+    if (!normalizedId) mdxFail(filePath, `${sectionName} subsection heading must produce a non-empty id`);
+    if (seen.has(normalizedId)) {
+      mdxFail(filePath, `Duplicate ${sectionName.toLowerCase()} id after normalization: "${normalizedId}"`);
+    }
+    seen.add(normalizedId);
+    const startIdx = h.line;
+    const endIdx = next ? next.line - 1 : lines.length;
+    const body = sliceSection(lines, startIdx, endIdx);
+    out.push({ rawId, normalizedId, body });
+  }
+  return out;
+}
+
+function parseAgentMdx(raw, filePath) {
+  const { frontmatter, body } = extractFrontmatter(raw, filePath);
+
+  let fm;
+  try {
+    fm = parseYaml(frontmatter);
+  } catch (err) {
+    mdxFail(filePath, `failed to parse YAML frontmatter: ${err?.message ?? String(err)}`);
+  }
+  if (!fm || typeof fm !== "object" || Array.isArray(fm)) mdxFail(filePath, "frontmatter must be a YAML object");
+
+  const fmAgent = fm.agent && typeof fm.agent === "object" && !Array.isArray(fm.agent) ? fm.agent : undefined;
+  const fmExt = fm.extensions && typeof fm.extensions === "object" && !Array.isArray(fm.extensions) ? fm.extensions : undefined;
+  const conflictChecks = [
+    { label: "Description", isPresent: fm.description !== undefined || fmAgent?.description !== undefined },
+    {
+      label: "System Prompt",
+      isPresent: fm.systemPrompt !== undefined || fmAgent?.systemPrompt !== undefined || fmExt?.systemPrompt !== undefined
+    },
+    { label: "Rules", isPresent: fm.rules !== undefined || fmAgent?.rules !== undefined },
+    { label: "Skills", isPresent: fm.skills !== undefined || fmAgent?.skills !== undefined }
+  ];
+  for (const c of conflictChecks) {
+    if (!c.isPresent) continue;
+    const verb = c.label === "Rules" || c.label === "Skills" ? "are" : "is";
+    mdxFail(filePath, `${c.label} ${verb} defined both in frontmatter and body. Choose exactly one source.`);
+  }
+
+  const id = typeof fm.id === "string" ? fm.id.trim() : "";
+  const name = typeof fm.name === "string" ? fm.name.trim() : "";
+  const version = typeof fm.version === "string" ? fm.version.trim() : "";
+  if (!id) mdxFail(filePath, "missing required frontmatter field: id");
+  if (!name) mdxFail(filePath, "missing required frontmatter field: name");
+  if (!version) mdxFail(filePath, "missing required frontmatter field: version");
+  if (!fm.runtime) mdxFail(filePath, "missing required frontmatter field: runtime");
+
+  let mcp;
+  if (fm.mcp !== undefined) {
+    if (!fm.mcp || typeof fm.mcp !== "object" || Array.isArray(fm.mcp)) mdxFail(filePath, "frontmatter.mcp must be an object");
+    if (fm.mcp.tools !== undefined) {
+      if (!Array.isArray(fm.mcp.tools)) mdxFail(filePath, "frontmatter.mcp.tools must be an array");
+      const tools = fm.mcp.tools.map((t, i) => {
+        if (typeof t !== "string" || t.trim().length === 0) mdxFail(filePath, `frontmatter.mcp.tools[${i}] must be a non-empty string`);
+        return t.trim();
+      });
+      mcp = { tools };
+    }
+  }
+
+  let auth;
+  if (fm.auth !== undefined) {
+    if (!fm.auth || typeof fm.auth !== "object" || Array.isArray(fm.auth)) mdxFail(filePath, "frontmatter.auth must be an object");
+    const kind = fm.auth.kind;
+    const header = fm.auth.header;
+    if (typeof kind !== "string" || kind.trim().length === 0) mdxFail(filePath, "frontmatter.auth.kind must be a non-empty string");
+    const k = kind.trim();
+    if (k !== "none" && k !== "bearer" && k !== "apiKey") mdxFail(filePath, 'frontmatter.auth.kind must be "none" | "bearer" | "apiKey"');
+    if (header !== undefined && (typeof header !== "string" || header.trim().length === 0)) mdxFail(filePath, "frontmatter.auth.header must be a non-empty string");
+    auth = { kind: k, ...(typeof header === "string" ? { header: header.trim() } : {}) };
+  }
+
+  const lines = String(body ?? "").replace(/\r\n/g, "\n").split("\n");
+  const headings = parseHeadings(body);
+  const headingKey = (t) => collapseWs(String(t ?? "")).toLowerCase();
+  const expected = [
+    { level: 1, key: "description", label: "Description" },
+    { level: 2, key: "system prompt", label: "System Prompt" },
+    { level: 2, key: "rules", label: "Rules" },
+    { level: 2, key: "skills", label: "Skills" }
+  ];
+
+  const found = [];
+  let cursor = 0;
+  for (const exp of expected) {
+    let match;
+    for (let i = cursor; i < headings.length; i++) {
+      const h = headings[i];
+      if (h.level === exp.level && headingKey(h.text) === exp.key) {
+        match = h;
+        cursor = i + 1;
+        break;
+      }
+    }
+    if (!match) mdxFail(filePath, `missing required markdown section: ${"#".repeat(exp.level)} ${exp.label}`);
+    found.push(match);
+  }
+
+  const firstNonEmpty = lines.findIndex((l) => l.trim().length > 0);
+  if (firstNonEmpty !== -1) {
+    const first = lines[firstNonEmpty].trimStart();
+    if (!/^#\s+description\s*$/i.test(collapseWs(first))) mdxFail(filePath, 'first markdown section must be "# Description"');
+  }
+
+  const [hDesc, hSys, hRules, hSkills] = found;
+  const desc = sliceSection(lines, hDesc.line, hSys.line - 1);
+  const sysPrompt = sliceSection(lines, hSys.line, hRules.line - 1);
+  const rulesMarkdown = sliceSection(lines, hRules.line, hSkills.line - 1);
+  const skillsMarkdown = sliceSection(lines, hSkills.line, lines.length);
+
+  const rules = parseSubsections(rulesMarkdown, filePath, "Rules").map((r) => ({ id: r.normalizedId, text: r.body }));
+  const skills = parseSubsections(skillsMarkdown, filePath, "Skills").map((s) => ({ id: s.normalizedId, description: s.body }));
+  if (skills.length === 0) mdxFail(filePath, '## Skills must contain at least one "### <skill-id>" subsection');
+
+  /** @type {Record<string, unknown>} */
+  const extensions = {};
+  if (String(sysPrompt ?? "").trim().length > 0) extensions.systemPrompt = sysPrompt;
+
+  const agent = {
+    id,
+    name,
+    version,
+    description: desc,
+    skills,
+    ...(rules.length > 0 ? { rules } : {}),
+    ...(mcp ? { mcp } : {}),
+    ...(auth ? { auth } : {}),
+    ...(Object.keys(extensions).length > 0 ? { extensions } : {})
+  };
+
+  return { agent, runtime: fm.runtime };
+}
+
 async function resolveAgent(agentId) {
   const builtins = getBuiltInAgents();
   const builtInFound = builtins.find((a) => a.agent.id === agentId);
@@ -549,44 +782,78 @@ function parseHeaderEnv(flags) {
 
 async function cmdAgentsRegister(flags) {
   const file = strFlag(flags, "file");
+  const files = flags.files;
   const json = strFlag(flags, "json");
-  if (!file && !json) fail(`Missing --file or --json\n\n${usage()}`);
-  if (file && json) fail(`Use only one of --file or --json\n\n${usage()}`);
+  const fileList =
+    Array.isArray(files) ? files.filter((f) => typeof f === "string") : typeof files === "string" ? [files] : [];
 
-  let parsed;
-  try {
-    const raw = file ? await readFile(file, "utf-8") : json;
-    parsed = JSON.parse(raw);
-  } catch (err) {
-    fail(`Failed to parse JSON: ${err?.message ?? String(err)}`);
-  }
+  if (fileList.length === 0 && file) fileList.push(file);
 
-  let config;
-  try {
-    config = validateAgentConfig(parsed);
-  } catch (err) {
-    fail(err?.message ?? String(err));
+  const hasFiles = fileList.length > 0;
+  if (!hasFiles && !json) fail(`Missing --files or --json\n\n${usage()}`);
+  if (hasFiles && json) fail(`Use only one of --files/--file or --json\n\n${usage()}`);
+
+  /** @type {any[]} */
+  const configs = [];
+  if (json) {
+    let parsed;
+    try {
+      parsed = JSON.parse(json);
+    } catch (err) {
+      fail(`Failed to parse JSON: ${err?.message ?? String(err)}`);
+    }
+    try {
+      configs.push(validateAgentConfig(parsed));
+    } catch (err) {
+      fail(err?.message ?? String(err));
+    }
+  } else {
+    for (const p of fileList) {
+      try {
+        const raw = await readFile(p, "utf-8");
+        const parsed = p.toLowerCase().endsWith(".agent.mdx")
+          ? parseAgentMdx(raw, p)
+          : JSON.parse(raw);
+        configs.push(validateAgentConfig(parsed));
+      } catch (err) {
+        fail(`Failed to register "${p}": ${err?.message ?? String(err)}`);
+      }
+    }
   }
 
   // Persist non-secret auth references (env var names) if provided.
   const bearerEnv = strFlag(flags, "bearer-env");
   const apiKeyEnv = strFlag(flags, "api-key-env");
   const headerEnv = parseHeaderEnv(flags);
-  if (bearerEnv || apiKeyEnv || Object.keys(headerEnv).length > 0) {
-    config.authRef = {
-      ...(config.authRef ?? {}),
-      ...(bearerEnv ? { bearerEnv } : {}),
-      ...(apiKeyEnv ? { apiKeyEnv } : {}),
-      ...(Object.keys(headerEnv).length > 0 ? { headerEnv: { ...(config.authRef?.headerEnv ?? {}), ...headerEnv } } : {})
-    };
+  for (const config of configs) {
+    if (bearerEnv || apiKeyEnv || Object.keys(headerEnv).length > 0) {
+      config.authRef = {
+        ...(config.authRef ?? {}),
+        ...(bearerEnv ? { bearerEnv } : {}),
+        ...(apiKeyEnv ? { apiKeyEnv } : {}),
+        ...(Object.keys(headerEnv).length > 0
+          ? { headerEnv: { ...(config.authRef?.headerEnv ?? {}), ...headerEnv } }
+          : {})
+      };
+    }
   }
 
   const registry = await readAgentsRegistry();
-  const next = registry.agents.filter((a) => a?.agent?.id !== config.agent.id);
-  next.push(config);
+  let next = registry.agents;
+  /** @type {string[]} */
+  const agentIds = [];
+  for (const config of configs) {
+    next = next.filter((a) => a?.agent?.id !== config.agent.id);
+    next.push(config);
+    agentIds.push(config.agent.id);
+  }
   await writeAgentsRegistry(next);
 
-  process.stdout.write(JSON.stringify({ ok: true, agentId: config.agent.id }, null, 2) + "\n");
+  if (agentIds.length === 1) {
+    process.stdout.write(JSON.stringify({ ok: true, agentId: agentIds[0] }, null, 2) + "\n");
+  } else {
+    process.stdout.write(JSON.stringify({ ok: true, agentIds }, null, 2) + "\n");
+  }
 }
 
 async function runOneShotChat({ agentId, prompt }) {

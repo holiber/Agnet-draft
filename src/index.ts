@@ -4,6 +4,7 @@ export function helloWorld(name?: string): string {
 }
 
 export * from "./agent-interop.js";
+export * from "./agent-mdx.js";
 export * from "./local-runtime.js";
 export * from "./protocol.js";
 export * from "./framing.js";

@@ -163,3 +163,77 @@ test("agents register supports --file", async () => {
   expect(JSON.parse(reg.stdout)).toEqual({ ok: true, agentId: "from-file" });
 });
 
+test("agents register supports --files with multiple .agent.mdx files", async () => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "agentinterop-e2e-"));
+  const mockAgentPath = path.join(process.cwd(), "bin", "mock-agent.mjs");
+
+  const aPath = path.join(cwd, "a.agent.mdx");
+  const bPath = path.join(cwd, "b.agent.mdx");
+
+  await writeFile(
+    aPath,
+    `---
+id: mdx-a
+name: MDX A
+version: 0.1.0
+runtime:
+  transport: cli
+  command: ${process.execPath}
+  args: ["${mockAgentPath}"]
+---
+# Description
+Agent A.
+
+## System Prompt
+System A.
+
+## Rules
+### minimal-files
+Prefer fewer files.
+
+## Skills
+### chat
+Chat.
+`,
+    "utf-8"
+  );
+
+  await writeFile(
+    bPath,
+    `---
+id: mdx-b
+name: MDX B
+version: 0.1.0
+runtime:
+  transport: cli
+  command: ${process.execPath}
+  args: ["${mockAgentPath}"]
+---
+# Description
+Agent B.
+
+## System Prompt
+System B.
+
+## Rules
+### minimal-files
+Prefer fewer files.
+
+## Skills
+### chat
+Chat.
+`,
+    "utf-8"
+  );
+
+  const reg = await runCli(["agents", "register", "--files", aPath, bPath], { cwd });
+  expect(reg.code).toBe(0);
+  expect(JSON.parse(reg.stdout)).toEqual({ ok: true, agentIds: ["mdx-a", "mdx-b"] });
+
+  const listed = await runCli(["agents", "list", "--json"], { cwd });
+  expect(listed.code).toBe(0);
+  const parsed = JSON.parse(listed.stdout) as { agents: Array<{ id: string }> };
+  expect(parsed.agents.map((a) => a.id)).toContain("mdx-a");
+  expect(parsed.agents.map((a) => a.id)).toContain("mdx-b");
+});
+
