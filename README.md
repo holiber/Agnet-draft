@@ -5,6 +5,14 @@
 # Agnet
 A network for your AI agents
 
+## API docs (generated)
+
+Public API documentation is generated from a runtime snapshot.
+
+```bash
+npm run docs:api
+```
+
 ## CLI (local)
 
 This repo ships a small CLI that can talk to local stdio agents.
