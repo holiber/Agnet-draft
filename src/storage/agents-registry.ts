@@ -1,7 +1,7 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-import type { AgentConfig } from "../agent-interop.js";
+import type { AgentConfig } from "../agnet.js";
 
 export function agentsRegistryPath(cwd: string): string {
   return path.join(cwd, ".cache", "agnet", "agents.json");

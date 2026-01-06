@@ -36,6 +36,15 @@ export interface ApiArgOptions {
 
 export interface ApiEndpointOptions {
   pattern?: ApiEndpointPattern;
+  /**
+   * Marks an endpoint as non-public.
+   *
+   * Internal endpoints:
+   * - are not shown in CLI help
+   * - are not included in generated API docs
+   * - may still be callable for backwards compatibility
+   */
+  internal?: boolean;
 }
 
 export interface ApiArgMeta extends ApiArgOptions {
@@ -45,6 +54,7 @@ export interface ApiArgMeta extends ApiArgOptions {
 export interface ApiEndpointMeta {
   id: string;
   pattern: ApiEndpointPattern;
+  internal?: boolean;
   handlerClass: Function;
   handlerMethodName: string | symbol;
   args: ApiArgMeta[];
@@ -88,6 +98,7 @@ export function registerArg(params: {
 export function registerEndpoint(params: {
   id: string;
   pattern: ApiEndpointPattern;
+  internal?: boolean;
   target: object;
   methodName: MethodKey;
 }): void {
@@ -99,6 +110,7 @@ export function registerEndpoint(params: {
   const meta: ApiEndpointMeta = {
     id: params.id,
     pattern: params.pattern,
+    internal: params.internal,
     handlerClass,
     handlerMethodName: params.methodName,
     args

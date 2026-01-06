@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, writeFile } from "node:fs/promises";
 
-import { Agnet, resolveAuthHeaders } from "../src/agent-interop.js";
+import { Agnet, resolveAuthHeaders } from "../src/agnet.js";
 
 describe("Agnet.register", () => {
   it("registers from a parsed config object", () => {

@@ -123,21 +123,21 @@
       ]
     },
     {
-      "id": "agents.session.close",
+      "id": "agents.task.close",
       "pattern": "unary",
       "args": [
         {
-          "name": "sessionId",
+          "name": "taskId",
           "type": "string",
           "required": true,
           "cli": {
-            "flag": "--session"
+            "flag": "--task"
           }
         }
       ]
     },
     {
-      "id": "agents.session.open",
+      "id": "agents.task.open",
       "pattern": "unary",
       "args": [
         {
@@ -159,15 +159,15 @@
       ]
     },
     {
-      "id": "agents.session.send",
+      "id": "agents.task.send",
       "pattern": "serverStream",
       "args": [
         {
-          "name": "sessionId",
+          "name": "taskId",
           "type": "string",
           "required": true,
           "cli": {
-            "flag": "--session"
+            "flag": "--task"
           }
         },
         {

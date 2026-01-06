@@ -62,8 +62,8 @@ export interface TaskRef {
  * Task is the main execution container.
  *
  * Tier1 usage:
- * - `invoke()` => one Task
- * - `session`  => long-lived Task containing many Messages
+ * - `agents.invoke` => ephemeral execution (streams text)
+ * - `agents.task.*` => durable local Task with persisted message history
  */
 export type Task = TaskRef;
 
@@ -71,7 +71,7 @@ export type MessageRole = "user" | "assistant" | "system" | "tool";
 
 /**
  * Message is a unit of interaction inside a Task.
- * Messages form a session history and are the basis for future trajectories.
+ * Messages form a task history and are the basis for future trajectories.
  */
 export interface Message {
   id: string;
@@ -151,22 +151,31 @@ export interface ReadyMessage {
   version: 1;
 }
 
+/**
+ * @internal
+ *
+ * Legacy stdio protocol for the built-in mock agent and local CLI runtime.
+ * This is not a user-facing "Session" abstraction; Tier1 public APIs are task-first.
+ */
 export interface SessionStartMessage {
   type: "session/start";
   sessionId?: string;
 }
 
+/** @internal */
 export interface SessionStartedMessage {
   type: "session/started";
   sessionId: string;
 }
 
+/** @internal */
 export interface SessionSendMessage {
   type: "session/send";
   sessionId: string;
   content: string;
 }
 
+/** @internal */
 export interface SessionStreamMessage {
   type: "session/stream";
   sessionId: string;
@@ -174,6 +183,7 @@ export interface SessionStreamMessage {
   delta: string;
 }
 
+/** @internal */
 export interface ToolCallPlaceholderMessage {
   type: "tool/call";
   sessionId: string;
@@ -181,6 +191,7 @@ export interface ToolCallPlaceholderMessage {
   args: JsonObject;
 }
 
+/** @internal */
 export interface SessionCompleteMessage {
   type: "session/complete";
   sessionId: string;

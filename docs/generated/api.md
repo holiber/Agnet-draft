@@ -42,14 +42,14 @@ Version: **1**
 
 ---
 
-### `agents.session.close` (unary)
+### `agents.task.close` (unary)
 
 **Args**
-- `sessionId` (string, required)
+- `taskId` (string, required)
 
 ---
 
-### `agents.session.open` (unary)
+### `agents.task.open` (unary)
 
 **Args**
 - `agentId` (string, optional)
@@ -57,10 +57,10 @@ Version: **1**
 
 ---
 
-### `agents.session.send` (serverStream)
+### `agents.task.send` (serverStream)
 
 **Args**
-- `sessionId` (string, required)
+- `taskId` (string, required)
 - `prompt` (string, required)
 
 ---

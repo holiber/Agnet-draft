@@ -49,19 +49,19 @@ test("agents invoke streams and prints final output", async () => {
   expect(res.stdout).toBe("MockAgent response #1: hello\n");
 });
 
-test("agents session open/send/close replays history across commands", async () => {
-  const opened = await runCli(["agents", "session", "open"]);
+test("agents task open/send/close replays history across commands", async () => {
+  const opened = await runCli(["agents", "task", "open"]);
   expect(opened.code).toBe(0);
-  const sessionId = opened.stdout.trim();
-  expect(sessionId).toMatch(/^session-\d+-[a-f0-9]+$/);
+  const taskId = opened.stdout.trim();
+  expect(taskId).toMatch(/^task-\d+-[a-f0-9]+$/);
 
   try {
     const send1 = await runCli([
       "agents",
-      "session",
+      "task",
       "send",
-      "--session",
-      sessionId,
+      "--task",
+      taskId,
       "--prompt",
       "hello"
     ]);
@@ -70,17 +70,17 @@ test("agents session open/send/close replays history across commands", async () 
 
     const send2 = await runCli([
       "agents",
-      "session",
+      "task",
       "send",
-      "--session",
-      sessionId,
+      "--task",
+      taskId,
       "--prompt",
       "world"
     ]);
     expect(send2.code).toBe(0);
     expect(send2.stdout).toBe("MockAgent response #2: world\n");
   } finally {
-    const closed = await runCli(["agents", "session", "close", "--session", sessionId]);
+    const closed = await runCli(["agents", "task", "close", "--task", taskId]);
     expect(closed.code).toBe(0);
     expect(closed.stdout.trim()).toBe("ok");
   }

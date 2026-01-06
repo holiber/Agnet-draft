@@ -51,6 +51,7 @@ export class ApiHost {
 
     const endpoints = getRegisteredEndpoints()
       .filter((e) => !isInternalEndpointId(e.id))
+      .filter((e) => !e.internal)
       .map((e) => ({
         id: e.id,
         pattern: e.pattern,

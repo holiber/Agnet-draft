@@ -12,6 +12,7 @@ export const Api = {
       registerEndpoint({
         id,
         pattern: opts.pattern ?? "unary",
+        internal: opts.internal ?? false,
         target,
         methodName
       });

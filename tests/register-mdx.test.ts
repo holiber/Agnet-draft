@@ -3,7 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { mkdtemp, writeFile } from "node:fs/promises";
 
-import { Agnet } from "../src/agent-interop.js";
+import { Agnet } from "../src/agnet.js";
 
 describe("Agnet.register (.agent.mdx)", () => {
   it("registers from a .agent.mdx file path", async () => {

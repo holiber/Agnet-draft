@@ -9,7 +9,7 @@ export * from "./api/snapshot.js";
 export * from "./api/api-host.js";
 export * from "./api/doc-renderer.js";
 
-export * from "./agent-interop.js";
+export * from "./agnet.js";
 export * from "./agent-mdx.js";
 export * from "./local-runtime.js";
 export * from "./protocol.js";

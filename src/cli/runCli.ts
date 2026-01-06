@@ -271,16 +271,17 @@ export async function runCli(argv: string[]): Promise<void> {
   Api.registerHandlerFactory(AgentsApi, () => new AgentsApi({ cwd: process.cwd(), env: process.env, mockAgentPath }));
 
   const endpoints = getRegisteredEndpoints();
+  const publicEndpoints = endpoints.filter((e) => !e.internal);
   const tokens = argv.slice(2);
 
   if (tokens.length === 0 || tokens.includes("--help") || tokens.includes("-h")) {
-    process.stdout.write(usage(endpoints) + "\n");
+    process.stdout.write(usage(publicEndpoints) + "\n");
     return;
   }
 
   const selected = selectEndpoint(endpoints, tokens);
   if (!selected) {
-    process.stderr.write(usage(endpoints) + "\n");
+    process.stderr.write(usage(publicEndpoints) + "\n");
     process.exitCode = 1;
     return;
   }

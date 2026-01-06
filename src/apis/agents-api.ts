@@ -2,14 +2,14 @@ import { readFile } from "node:fs/promises";
 import process from "node:process";
 
 import { Api } from "../api/api.js";
-import type { AgentCard, AgentConfig, AgentRuntimeConfig } from "../agent-interop.js";
-import { validateAgentConfig } from "../agent-interop.js";
+import type { AgentCard, AgentConfig, AgentRuntimeConfig } from "../agnet.js";
+import { validateAgentConfig } from "../agnet.js";
 import { parseAgentMdx } from "../agent-mdx.js";
 import { spawnLocalAgent } from "../local-runtime.js";
 import type { ChatMessage } from "../protocol.js";
-import { nextMessage, randomId, sendAndWaitComplete, waitForType } from "../runtime/session-client.js";
+import { nextMessage, randomId, sendAndWaitComplete, waitForType } from "../runtime/task-client.js";
 import { readAgentsRegistry, writeAgentsRegistry } from "../storage/agents-registry.js";
-import { deleteSession, readSession, writeSession } from "../storage/sessions.js";
+import { deleteTask, readTask, writeTask } from "../storage/tasks.js";
 
 export interface AgentsApiContext {
   cwd: string;
@@ -61,7 +61,7 @@ export class AgentsApi {
           skills: [
             {
               id: "chat",
-              description: "Chat-style interaction over session/start + session/send"
+              description: "Chat-style interaction as a Task, streamed over stdio"
             }
           ]
         },
@@ -266,8 +266,8 @@ export class AgentsApi {
     }
   }
 
-  @Api.endpoint("agents.session.open")
-  async sessionOpen(
+  @Api.endpoint("agents.task.open")
+  async taskOpen(
     @Api.arg({ name: "agentId", type: "string", cli: { flag: "--agent" } })
     agentId?: string,
     @Api.arg({ name: "skill", type: "string", cli: { flag: "--skill" } })
@@ -277,29 +277,34 @@ export class AgentsApi {
     const resolvedSkill = skill ?? "chat";
     if (resolvedSkill !== "chat") throw new Error(`Unknown skill: ${resolvedSkill}`);
 
-    const sessionId = randomId("session");
-    await writeSession(this.ctx.cwd, sessionId, {
+    const taskId = randomId("task");
+    await writeTask(this.ctx.cwd, taskId, {
       version: 1,
-      sessionId,
+      taskId,
       agentId: resolvedAgentId,
       skill: resolvedSkill,
       history: []
     });
-    return sessionId;
+    return taskId;
   }
 
-  @Api.endpoint("agents.session.send", { pattern: "serverStream" })
-  async *sessionSend(
-    @Api.arg({ name: "sessionId", type: "string", required: true, cli: { flag: "--session" } })
-    sessionId?: string,
+  @Api.endpoint("agents.task.send", { pattern: "serverStream" })
+  async *taskSend(
+    @Api.arg({
+      name: "taskId",
+      type: "string",
+      required: true,
+      cli: { flag: "--task", aliases: ["--session"] }
+    })
+    taskId?: string,
     @Api.arg({ name: "prompt", type: "string", required: true, cli: { flag: "--prompt" } })
     prompt?: string
   ): AsyncIterable<string> {
-    if (!sessionId || !prompt) throw new Error("Missing --session and/or --prompt");
+    if (!taskId || !prompt) throw new Error("Missing --task and/or --prompt");
 
-    const sess = await readSession(this.ctx.cwd, sessionId);
-    const agentId = sess.agentId ?? "mock-agent";
-    const skill = sess.skill ?? "chat";
+    const task = await readTask(this.ctx.cwd, taskId);
+    const agentId = task.agentId ?? "mock-agent";
+    const skill = task.skill ?? "chat";
     if (skill !== "chat") throw new Error(`Unknown skill: ${skill}`);
 
     const agent = await this.resolveAgent(agentId);
@@ -315,10 +320,10 @@ export class AgentsApi {
     try {
       const iter = conn.transport[Symbol.asyncIterator]();
       await waitForType(iter, "ready");
-      await conn.transport.send({ type: "session/start", sessionId });
+      await conn.transport.send({ type: "session/start", sessionId: taskId });
       await waitForType(iter, "session/started");
 
-      const history = Array.isArray(sess.history) ? sess.history : ([] as ChatMessage[]);
+      const history = Array.isArray(task.history) ? task.history : ([] as ChatMessage[]);
       const priorUsers = history.filter(
         (m) => m && (m as ChatMessage).role === "user" && typeof (m as ChatMessage).content === "string"
       ) as ChatMessage[];
@@ -327,30 +332,30 @@ export class AgentsApi {
         await sendAndWaitComplete({
           iter,
           transport: conn.transport,
-          sessionId,
+          sessionId: taskId,
           content: m.content
         });
       }
 
-      await conn.transport.send({ type: "session/send", sessionId, content: prompt });
+      await conn.transport.send({ type: "session/send", sessionId: taskId, content: prompt });
 
       let completeHistory: ChatMessage[] | undefined;
       let nextIndex = 0;
 
       // eslint-disable-next-line no-constant-condition
       while (true) {
-        const msg = await nextMessage(iter, `stream/complete for session "${sessionId}"`);
+        const msg = await nextMessage(iter, `stream/complete for task "${taskId}"`);
         if (!msg || typeof msg !== "object") continue;
 
         const type = (msg as { type?: unknown }).type;
-        if (type === "session/stream" && (msg as { sessionId?: unknown }).sessionId === sessionId) {
+        if (type === "session/stream" && (msg as { sessionId?: unknown }).sessionId === taskId) {
           const stream = msg as { index?: unknown; delta?: unknown };
           void (typeof stream.index === "number" ? stream.index : nextIndex++);
           const delta = typeof stream.delta === "string" ? stream.delta : "";
           yield delta;
           continue;
         }
-        if (type === "session/complete" && (msg as { sessionId?: unknown }).sessionId === sessionId) {
+        if (type === "session/complete" && (msg as { sessionId?: unknown }).sessionId === taskId) {
           const complete = msg as { history?: unknown };
           completeHistory = Array.isArray(complete.history) ? (complete.history as ChatMessage[]) : undefined;
           break;
@@ -359,9 +364,9 @@ export class AgentsApi {
 
       yield "\n";
 
-      await writeSession(this.ctx.cwd, sessionId, {
+      await writeTask(this.ctx.cwd, taskId, {
         version: 1,
-        sessionId,
+        taskId,
         agentId,
         skill,
         history: completeHistory ?? history
@@ -371,14 +376,61 @@ export class AgentsApi {
     }
   }
 
-  @Api.endpoint("agents.session.close")
+  @Api.endpoint("agents.task.close")
+  async taskClose(
+    @Api.arg({
+      name: "taskId",
+      type: "string",
+      required: true,
+      cli: { flag: "--task", aliases: ["--session"] }
+    })
+    taskId?: string
+  ): Promise<string> {
+    if (!taskId) throw new Error("Missing --task");
+    await deleteTask(this.ctx.cwd, taskId);
+    return "ok";
+  }
+
+  // ---------------------------------------------------------------------------
+  // Backwards-compatible "session" endpoints (hidden from docs/help).
+  // ---------------------------------------------------------------------------
+
+  @Api.endpoint("agents.session.open", { internal: true })
+  async sessionOpen(
+    @Api.arg({ name: "agentId", type: "string", cli: { flag: "--agent" } })
+    agentId?: string,
+    @Api.arg({ name: "skill", type: "string", cli: { flag: "--skill" } })
+    skill?: string
+  ): Promise<string> {
+    return await this.taskOpen(agentId, skill);
+  }
+
+  @Api.endpoint("agents.session.send", { pattern: "serverStream", internal: true })
+  async *sessionSend(
+    @Api.arg({
+      name: "sessionId",
+      type: "string",
+      required: true,
+      cli: { flag: "--session", aliases: ["--task"] }
+    })
+    sessionId?: string,
+    @Api.arg({ name: "prompt", type: "string", required: true, cli: { flag: "--prompt" } })
+    prompt?: string
+  ): AsyncIterable<string> {
+    yield* this.taskSend(sessionId, prompt);
+  }
+
+  @Api.endpoint("agents.session.close", { internal: true })
   async sessionClose(
-    @Api.arg({ name: "sessionId", type: "string", required: true, cli: { flag: "--session" } })
+    @Api.arg({
+      name: "sessionId",
+      type: "string",
+      required: true,
+      cli: { flag: "--session", aliases: ["--task"] }
+    })
     sessionId?: string
   ): Promise<string> {
-    if (!sessionId) throw new Error("Missing --session");
-    await deleteSession(this.ctx.cwd, sessionId);
-    return "ok";
+    return await this.taskClose(sessionId);
   }
 }
 
