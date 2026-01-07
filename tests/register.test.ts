@@ -5,10 +5,10 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 
 import { Agnet, resolveAuthHeaders } from "../src/agnet.js";
 
-describe("Agnet.register", () => {
+describe("Agnet.providers.register", () => {
   it("registers from a parsed config object", () => {
     const ai = new Agnet();
-    const ref = ai.register({
+    const ref = ai.providers.register({
       agent: {
         id: "a1",
         name: "Agent One",
@@ -18,12 +18,12 @@ describe("Agnet.register", () => {
       runtime: { transport: "cli", command: "node", args: ["agent.js"] }
     });
     expect(ref.id).toBe("a1");
-    expect(ai.get("a1")?.card.name).toBe("Agent One");
+    expect(ai.providers.get("a1")?.card.name).toBe("Agent One");
   });
 
   it("registers from { card, adapter }", () => {
     const ai = new Agnet();
-    const ref = ai.register({
+    const ref = ai.providers.register({
       card: { id: "adapter-agent", name: "Adapter Agent", version: "1.0.0", skills: [{ id: "chat" }] },
       adapter: { kind: "unit-test" }
     });
@@ -44,7 +44,7 @@ describe("Agnet.register", () => {
     );
 
     const ai = new Agnet();
-    const ref = ai.register(jsonPath);
+    const ref = ai.providers.register(jsonPath);
     expect(ref.id).toBe("from-file");
     expect(ref.runtime?.transport).toBe("http");
   });
@@ -52,7 +52,7 @@ describe("Agnet.register", () => {
   it("throws a clear field-path error on invalid config", () => {
     const ai = new Agnet();
     expect(() =>
-      ai.register({
+      ai.providers.register({
         agent: { name: "x", version: "1.0.0", skills: [{ id: "chat" }] },
         runtime: { transport: "cli", command: "node" }
       } as any)

@@ -5,7 +5,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 
 import { Agnet } from "../src/agnet.js";
 
-describe("Agnet.register (.agent.mdx)", () => {
+describe("Agnet.providers.register (.agent.mdx)", () => {
   it("registers from a .agent.mdx file path", async () => {
     const dir = await mkdtemp(path.join(os.tmpdir(), "agnet-mdx-"));
     const mdxPath = path.join(dir, "a.agent.mdx");
@@ -38,11 +38,11 @@ Talk.
     );
 
     const ai = new Agnet();
-    const ref = ai.register(mdxPath);
+    const ref = ai.providers.register(mdxPath);
     expect(ref.id).toBe("mdx-a");
     expect(ref.runtime?.transport).toBe("http");
-    expect(ai.listAgents().map((a) => a.id)).toContain("mdx-a");
-    expect((ai.get("mdx-a")?.card.extensions as any)?.systemPrompt).toContain("System prompt A.");
+    expect(ai.providers.list().map((a) => a.id)).toContain("mdx-a");
+    expect((ai.providers.get("mdx-a")?.card.extensions as any)?.systemPrompt).toContain("System prompt A.");
   });
 });
 
