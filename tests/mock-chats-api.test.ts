@@ -4,11 +4,11 @@ import { fileURLToPath } from "node:url";
 import type {
   AgentToClientMessage,
   ChatEvent,
-  ChatRef,
   ChatsCancelResultMessage,
   ChatsCreatedMessage,
   ChatsGetResultMessage,
-  ChatsListResultMessage
+  ChatsListResultMessage,
+  TChat
 } from "../src/protocol.js";
 import { spawnLocalAgent } from "../src/local-runtime.js";
 
@@ -73,10 +73,12 @@ describe("mock-agent Chats API (stdio framed)", () => {
       });
       const created = (await waitForType(iter, "chats/created")) as ChatsCreatedMessage;
       expect(created.chat.id).toBe("c-stream");
-      expect(created.chat.execution.location).toBe("local");
-      expect(created.chat.execution.durability).toBe("ephemeral");
-      expect(created.chat.execution.providerId).toBe("local");
-      expect(created.chat.execution.hint).toMatch(/runs locally/i);
+      expect(created.chat.location).toBe("local");
+      expect(created.chat.persistence).toBe("ephemeral");
+      expect(created.chat.canRead).toBe(true);
+      expect(created.chat.canPost).toBe(true);
+      expect(created.chat.channelType).toBe("chat");
+      expect(created.chat.extra).toMatchObject({ hint: expect.stringMatching(/runs locally/i) });
 
       await conn.transport.send({ type: "chats/subscribe", chatId: "c-stream" });
 
@@ -100,7 +102,8 @@ describe("mock-agent Chats API (stdio framed)", () => {
         .map((d) => d.delta)
         .join("");
       expect(combined).toBe("MockTask response #1: hello");
-      expect(completed.chat.status).toBe("completed");
+      expect(completed.chat.id).toBe("c-stream");
+      expect(completed.chat._rawRest).toMatchObject({ status: "completed" });
     } finally {
       await conn.close();
     }
@@ -134,11 +137,13 @@ describe("mock-agent Chats API (stdio framed)", () => {
 
       await conn.transport.send({ type: "chats/get", chatId: "c1" });
       const got1 = (await waitForType(iter, "chats/getResult")) as ChatsGetResultMessage;
-      expect(got1.chat).toMatchObject({ id: "c1", status: "created" } satisfies Partial<ChatRef>);
+      expect(got1.chat).toMatchObject({ id: "c1" } satisfies Partial<TChat>);
+      expect(got1.chat._rawRest).toMatchObject({ status: "created" });
 
       await conn.transport.send({ type: "chats/get", chatId: "c2" });
       const got2 = (await waitForType(iter, "chats/getResult")) as ChatsGetResultMessage;
-      expect(got2.chat).toMatchObject({ id: "c2", status: "created" } satisfies Partial<ChatRef>);
+      expect(got2.chat).toMatchObject({ id: "c2" } satisfies Partial<TChat>);
+      expect(got2.chat._rawRest).toMatchObject({ status: "created" });
     } finally {
       await conn.close();
     }
@@ -164,7 +169,7 @@ describe("mock-agent Chats API (stdio framed)", () => {
 
       await conn.transport.send({ type: "chats/get", chatId: "c-cancel" });
       const got = (await waitForType(iter, "chats/getResult")) as ChatsGetResultMessage;
-      expect(got.chat.status).toBe("cancelled");
+      expect(got.chat._rawRest).toMatchObject({ status: "cancelled" });
 
       await conn.transport.send({ type: "chats/subscribe", chatId: "c-cancel" });
       let cancelledEvent: Extract<ChatEvent, { type: "chat.cancelled" }> | undefined;
@@ -173,7 +178,7 @@ describe("mock-agent Chats API (stdio framed)", () => {
         if (!isChatEvent(msg)) continue;
         if (msg.type === "chat.cancelled") cancelledEvent = msg;
       }
-      expect(cancelledEvent.chat.status).toBe("cancelled");
+      expect(cancelledEvent.chat._rawRest).toMatchObject({ status: "cancelled" });
     } finally {
       await conn.close();
     }

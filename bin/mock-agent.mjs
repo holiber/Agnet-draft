@@ -164,23 +164,36 @@ function nowIso() {
   return new Date().toISOString();
 }
 
-function makeChatRef({ chatId, providerId, title }) {
+function makeTChat({ chatId, providerId, title }) {
   const ts = nowIso();
   return {
     id: chatId,
-    providerId: providerId || "mock-agent",
-    status: "created",
     title: title || `Mock Chat ${chatId}`,
-    createdAt: ts,
-    updatedAt: ts,
-    execution: {
-      location: "local",
-      durability: "ephemeral",
-      providerId: "local",
+    location: "local",
+    persistence: "ephemeral",
+    canRead: true,
+    canPost: true,
+    channelType: "chat",
+    extra: {
+      providerId: providerId || "mock-agent",
       hint: "This chat runs locally and may stop if the process exits."
     },
-    _rawData: { mock: true, kind: "chat" }
+    _rawRest: {
+      providerId: providerId || "mock-agent",
+      status: "created",
+      createdAt: ts,
+      updatedAt: ts,
+      mock: true,
+      kind: "chat"
+    }
   };
+}
+
+function setChatStatus(entry, status) {
+  entry.status = status;
+  if (!entry.chat._rawRest) entry.chat._rawRest = {};
+  entry.chat._rawRest.status = status;
+  entry.chat._rawRest.updatedAt = nowIso();
 }
 
 await writeMessage({ type: "ready", pid: process.pid, version: 1 });
@@ -201,13 +214,14 @@ async function handleChunk(chunk) {
       const prompt = typeof msg.prompt === "string" ? msg.prompt : "";
 
       if (!chats.has(chatId)) {
-        const chat = makeChatRef({ chatId, providerId, title });
+        const chat = makeTChat({ chatId, providerId, title });
         chats.set(chatId, {
           chat,
           prompt,
           turns: 0,
           cancelled: false,
-          messageId: `msg-${chatId}-1`
+          messageId: `msg-${chatId}-1`,
+          status: "created"
         });
         chatOrder.push(chatId);
       } else {
@@ -246,10 +260,10 @@ async function handleChunk(chunk) {
       const all = chatOrder
         .map((id) => chats.get(id))
         .filter(Boolean)
-        .map((t) => t.chat);
+        .map((t) => t);
 
       const filtered = status ? all.filter((t) => t.status === status) : all;
-      const page = filtered.slice(offset, offset + limit);
+      const page = filtered.slice(offset, offset + limit).map((t) => t.chat);
       const nextCursor = offset + limit < filtered.length ? String(offset + limit) : undefined;
       await writeMessage({ type: "chats/listResult", chats: page, nextCursor });
       continue;
@@ -274,8 +288,7 @@ async function handleChunk(chunk) {
         continue;
       }
       found.cancelled = true;
-      found.chat.status = "cancelled";
-      found.chat.updatedAt = nowIso();
+      setChatStatus(found, "cancelled");
       await writeMessage({ type: "chats/cancelResult", ok: true });
       continue;
     }
@@ -289,7 +302,7 @@ async function handleChunk(chunk) {
       }
 
       const timestamp = nowIso();
-      if (found.chat.status === "cancelled" || found.cancelled) {
+      if (found.status === "cancelled" || found.cancelled) {
         await writeMessage({
           type: "chat.cancelled",
           chatId,
@@ -300,8 +313,7 @@ async function handleChunk(chunk) {
       }
 
       found.turns += 1;
-      found.chat.status = "running";
-      found.chat.updatedAt = nowIso();
+      setChatStatus(found, "running");
       await writeMessage({ type: "chat.started", chatId, timestamp: nowIso() });
 
       const assistantContent = `MockTask response #${found.turns}: ${found.prompt || ""}`.trimEnd();
@@ -309,7 +321,7 @@ async function handleChunk(chunk) {
       const messageId = `msg-${chatId}-${found.turns}`;
 
       for (let i = 0; i < deltas.length; i++) {
-        if (found.chat.status === "cancelled" || found.cancelled) {
+        if (found.status === "cancelled" || found.cancelled) {
           await writeMessage({
             type: "chat.cancelled",
             chatId,
@@ -329,10 +341,9 @@ async function handleChunk(chunk) {
         await Promise.resolve();
       }
 
-      if (found.chat.status === "cancelled" || found.cancelled) continue;
+      if (found.status === "cancelled" || found.cancelled) continue;
 
-      found.chat.status = "completed";
-      found.chat.updatedAt = nowIso();
+      setChatStatus(found, "completed");
       await writeMessage({
         type: "chat.completed",
         chatId,

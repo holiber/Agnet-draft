@@ -1,18 +1,21 @@
 import { describe, expect, expectTypeOf, it } from "vitest";
 
-import type { AgentEvent, Artifact, ChatEvent, ChatRef, Message, Part } from "../src/protocol.js";
+import type { AgentEvent, Artifact, ChatEvent, Message, Part, TChat } from "../src/protocol.js";
 
-describe("A2A core entities (Tier1)", () => {
+describe("Core entities", () => {
   it("can model Chat -> Message -> Part and Artifact", () => {
     const now = new Date().toISOString();
 
     const chat = {
       id: "c1",
-      providerId: "provider-1",
-      status: "created",
-      createdAt: now,
-      execution: { location: "local", durability: "ephemeral" }
-    } satisfies ChatRef;
+      title: "Chat 1",
+      location: "local",
+      persistence: "ephemeral",
+      canRead: true,
+      canPost: true,
+      channelType: "chat",
+      _rawRest: { createdAt: now }
+    } satisfies TChat;
 
     const parts = [{ kind: "text", text: "hello" }] satisfies Part[];
 
@@ -31,7 +34,7 @@ describe("A2A core entities (Tier1)", () => {
       parts: [{ kind: "text", text: "result" }]
     } satisfies Artifact;
 
-    expect(chat.status).toBe("created");
+    expect(chat.location).toBe("local");
     expect(msg.chatId).toBe("c1");
     expect(msg.parts[0]).toEqual({ kind: "text", text: "hello" });
     expect(artifact.type).toBe("text/plain");
