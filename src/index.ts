@@ -17,3 +17,5 @@ export * from "./protocol.js";
 export * from "./framing.js";
 export * from "./stdio-transport.js";
 
+export * from "./workbench-lite.js";
+
