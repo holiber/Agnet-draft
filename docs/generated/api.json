@@ -4,6 +4,25 @@
   "profile": "default",
   "endpoints": [
     {
+      "id": "ask",
+      "pattern": "unary",
+      "args": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "providerId",
+          "type": "string",
+          "required": false,
+          "cli": {
+            "flag": "--provider"
+          }
+        }
+      ]
+    },
+    {
       "id": "chats.close",
       "pattern": "unary",
       "args": [
@@ -49,6 +68,25 @@
           "required": true,
           "cli": {
             "flag": "--prompt"
+          }
+        }
+      ]
+    },
+    {
+      "id": "prompt",
+      "pattern": "unary",
+      "args": [
+        {
+          "name": "prompt",
+          "type": "string",
+          "required": true
+        },
+        {
+          "name": "providerId",
+          "type": "string",
+          "required": false,
+          "cli": {
+            "flag": "--provider"
           }
         }
       ]

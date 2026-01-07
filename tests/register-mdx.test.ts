@@ -37,7 +37,7 @@ Talk.
       "utf-8"
     );
 
-    const ai = new Agnet();
+    const ai = new Agnet({ cwd: dir });
     const ref = ai.providers.register(mdxPath);
     expect(ref.id).toBe("mdx-a");
     expect(ref.runtime?.transport).toBe("http");

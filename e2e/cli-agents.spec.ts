@@ -54,6 +54,22 @@ test("chats create/send streams and prints final output", async () => {
   expect(res.stdout).toBe("MockAgent response #1: hello\n");
 });
 
+test("ask (root command) runs one-shot and prints final output", async () => {
+  const res = await runCli(["ask", "hello"]);
+  expect(res.code).toBe(0);
+  expect(res.stdout).toBe("MockAgent response #1: hello\n");
+});
+
+test("prompt (root command) runs one-shot and prints JSON result", async () => {
+  const res = await runCli(["prompt", "hello"]);
+  expect(res.code).toBe(0);
+
+  const parsed = JSON.parse(res.stdout) as { text: string; providerId: string; chatId: string };
+  expect(parsed.text).toBe("MockAgent response #1: hello");
+  expect(parsed.providerId).toBe("mock-agent");
+  expect(parsed.chatId).toMatch(/^chat-\d+-[a-f0-9]+$/);
+});
+
 test("chats create/send/close replays history across commands", async () => {
   const opened = await runCli(["chats", "create"]);
   expect(opened.code).toBe(0);

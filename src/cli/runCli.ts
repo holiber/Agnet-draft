@@ -7,6 +7,7 @@ import type { ApiArgMeta, ApiEndpointMeta } from "../api/registry.js";
 import { getRegisteredEndpoints, resolveHandlerInstance } from "../api/registry.js";
 import { ChatsApi } from "../apis/chats-api.js";
 import { ProvidersApi } from "../apis/providers-api.js";
+import { ShortcutsApi } from "../apis/shortcuts-api.js";
 
 function toErrorMessage(err: unknown): string {
   if (!err) return "Unknown error";
@@ -272,6 +273,7 @@ export async function runCli(argv: string[]): Promise<void> {
   const ctx = { cwd: process.cwd(), env: process.env, mockAgentPath };
   Api.registerHandlerFactory(ProvidersApi, () => new ProvidersApi(ctx));
   Api.registerHandlerFactory(ChatsApi, () => new ChatsApi(ctx));
+  Api.registerHandlerFactory(ShortcutsApi, () => new ShortcutsApi(ctx));
 
   const endpoints = getRegisteredEndpoints();
   const publicEndpoints = endpoints.filter((e) => !e.internal);

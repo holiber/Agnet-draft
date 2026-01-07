@@ -4,6 +4,16 @@ Version: **1**
 
 ---
 
+## ask.*
+
+### `ask` (unary)
+
+**Args**
+- `prompt` (string, required)
+- `providerId` (string, optional)
+
+---
+
 ## chats.*
 
 ### `chats.close` (unary)
@@ -25,6 +35,16 @@ Version: **1**
 **Args**
 - `chatId` (string, required)
 - `prompt` (string, required)
+
+---
+
+## prompt.*
+
+### `prompt` (unary)
+
+**Args**
+- `prompt` (string, required)
+- `providerId` (string, optional)
 
 ---
 

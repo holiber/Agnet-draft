@@ -6,8 +6,9 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { Agnet, resolveAuthHeaders } from "../src/agnet.js";
 
 describe("Agnet.providers.register", () => {
-  it("registers from a parsed config object", () => {
-    const ai = new Agnet();
+  it("registers from a parsed config object", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "agnet-register-"));
+    const ai = new Agnet({ cwd });
     const ref = ai.providers.register({
       agent: {
         id: "a1",
@@ -21,8 +22,9 @@ describe("Agnet.providers.register", () => {
     expect(ai.providers.get("a1")?.card.name).toBe("Agent One");
   });
 
-  it("registers from { card, adapter }", () => {
-    const ai = new Agnet();
+  it("registers from { card, adapter }", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "agnet-register-"));
+    const ai = new Agnet({ cwd });
     const ref = ai.providers.register({
       card: { id: "adapter-agent", name: "Adapter Agent", version: "1.0.0", skills: [{ id: "chat" }] },
       adapter: { kind: "unit-test" }
@@ -43,14 +45,15 @@ describe("Agnet.providers.register", () => {
       "utf-8"
     );
 
-    const ai = new Agnet();
+    const ai = new Agnet({ cwd: dir });
     const ref = ai.providers.register(jsonPath);
     expect(ref.id).toBe("from-file");
     expect(ref.runtime?.transport).toBe("http");
   });
 
-  it("throws a clear field-path error on invalid config", () => {
-    const ai = new Agnet();
+  it("throws a clear field-path error on invalid config", async () => {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), "agnet-register-"));
+    const ai = new Agnet({ cwd });
     expect(() =>
       ai.providers.register({
         agent: { name: "x", version: "1.0.0", skills: [{ id: "chat" }] },
