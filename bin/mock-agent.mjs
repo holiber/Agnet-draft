@@ -78,7 +78,8 @@ function parseArgs(argv) {
   const out = {
     chunks: 5,
     emitToolCalls: false,
-    streaming: true
+    streaming: true,
+    tools: []
   };
 
   // Optional env override for tests/CI:
@@ -101,6 +102,15 @@ function parseArgs(argv) {
     if (arg.startsWith("--chunks=")) {
       const n = Number(arg.slice("--chunks=".length));
       if (Number.isFinite(n) && n >= 1) out.chunks = Math.floor(n);
+    }
+    if (arg.startsWith("--tools=")) {
+      const raw = arg.slice("--tools=".length);
+      try {
+        const parsed = JSON.parse(raw);
+        if (Array.isArray(parsed)) out.tools = parsed;
+      } catch {
+        // Ignore invalid tool payloads in this mock agent.
+      }
     }
   }
   return out;
@@ -148,6 +158,9 @@ const decoder = new FrameDecoder();
 const sessions = new Map(); // sessionId -> { history: Array<{role, content}>, turns: number }
 let sessionCounter = 0;
 
+// sessionId -> { toolCallId, toolName, args }
+const pendingToolCalls = new Map();
+
 const chats = new Map(); // chatId -> { chat, prompt, messageId, turns, cancelled }
 const chatOrder = []; // stable creation order
 let chatCounter = 0;
@@ -162,6 +175,27 @@ function getOrCreateSession(sessionId) {
 
 function nowIso() {
   return new Date().toISOString();
+}
+
+function firstTwoNumbers(text) {
+  const matches = String(text).match(/-?\d+(?:\.\d+)?/g);
+  if (!matches || matches.length < 2) return null;
+  const a = Number(matches[0]);
+  const b = Number(matches[1]);
+  if (!Number.isFinite(a) || !Number.isFinite(b)) return null;
+  return { a, b };
+}
+
+function findTool(tools, name) {
+  if (!Array.isArray(tools)) return undefined;
+  for (const t of tools) {
+    if (!t || typeof t !== "object") continue;
+    if (t.type !== "function") continue;
+    const fn = t.function;
+    if (!fn || typeof fn !== "object") continue;
+    if (fn.name === name) return t;
+  }
+  return undefined;
 }
 
 function makeTChat({ chatId, providerId, title }) {
@@ -370,6 +404,27 @@ async function handleChunk(chunk) {
       session.history.push({ role: "user", content });
       session.turns += 1;
 
+      // If a "multiply" tool exists, emit an OpenAI-style tool call and wait
+      // for a corresponding "tool/result" message before completing.
+      const hasMultiply = !!findTool(config.tools, "multiply");
+      const nums = firstTwoNumbers(content);
+      if (config.streaming && hasMultiply && nums && !pendingToolCalls.has(sessionId)) {
+        const toolCallId = `call-${sessionId}-${session.turns}`;
+        const args = { a: nums.a, b: nums.b };
+        pendingToolCalls.set(sessionId, { toolCallId, toolName: "multiply", args });
+
+        await writeMessage({
+          type: "tool/call",
+          sessionId,
+          toolCall: {
+            id: toolCallId,
+            type: "function",
+            function: { name: "multiply", arguments: JSON.stringify(args) }
+          }
+        });
+        continue;
+      }
+
       const assistantContent = `MockAgent response #${session.turns}: ${content}`;
       const deltas = chunkString(assistantContent, config.chunks);
 
@@ -380,8 +435,14 @@ async function handleChunk(chunk) {
         await writeMessage({
           type: "tool/call",
           sessionId,
-          name: "mock.tool",
-          args: { turn: session.turns, inputLength: content.length }
+          toolCall: {
+            id: `call-${sessionId}-${session.turns}`,
+            type: "function",
+            function: {
+              name: "mock.tool",
+              arguments: JSON.stringify({ turn: session.turns, inputLength: content.length })
+            }
+          }
         });
       }
 
@@ -406,6 +467,44 @@ async function handleChunk(chunk) {
         message: assistantMessage,
         history: session.history.slice()
       });
+      continue;
+    }
+
+    if (msg.type === "tool/result") {
+      const sessionId = typeof msg.sessionId === "string" ? msg.sessionId : "";
+      const toolCallId = typeof msg.toolCallId === "string" ? msg.toolCallId : "";
+      const content = typeof msg.content === "string" ? msg.content : "";
+
+      const pending = pendingToolCalls.get(sessionId);
+      if (!pending) continue;
+      if (pending.toolCallId !== toolCallId) continue;
+
+      pendingToolCalls.delete(sessionId);
+      const session = getOrCreateSession(sessionId);
+      const assistantContent = `MockAgent multiply(${pending.args.a}, ${pending.args.b}) = ${content}`;
+      const deltas = chunkString(assistantContent, config.chunks);
+
+      if (config.streaming) {
+        for (let i = 0; i < deltas.length; i++) {
+          await writeMessage({
+            type: "session/stream",
+            sessionId,
+            index: i,
+            delta: deltas[i]
+          });
+          await Promise.resolve();
+        }
+      }
+
+      const assistantMessage = { role: "assistant", content: assistantContent };
+      session.history.push(assistantMessage);
+      await writeMessage({
+        type: "session/complete",
+        sessionId,
+        message: assistantMessage,
+        history: session.history.slice()
+      });
+      continue;
     }
   }
 }

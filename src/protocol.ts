@@ -393,12 +393,54 @@ export interface SessionStreamMessage {
   delta: string;
 }
 
+/**
+ * OpenAI-style tool definitions (JSON Schema).
+ *
+ * This is a minimal subset intended for local stdio-based mock agents and tests.
+ */
+export type OpenAIFunctionTool = {
+  type: "function";
+  function: {
+    name: string;
+    description?: string;
+    /** JSON Schema (Draft-07-ish). */
+    parameters: JsonObject;
+  };
+};
+
+export type OpenAITool = OpenAIFunctionTool;
+
+/**
+ * OpenAI-style tool call payload.
+ *
+ * Note: `arguments` is a JSON string (as in OpenAI APIs).
+ */
+export type OpenAIToolCall = {
+  id: string;
+  type: "function";
+  function: {
+    name: string;
+    arguments: string;
+  };
+};
+
 /** @internal */
-export interface ToolCallPlaceholderMessage {
+export interface ToolCallMessage {
   type: "tool/call";
   sessionId: string;
-  name: string;
-  args: JsonObject;
+  toolCall: OpenAIToolCall;
+}
+
+/** @internal */
+export interface ToolResultMessage {
+  type: "tool/result";
+  sessionId: string;
+  toolCallId: string;
+  /**
+   * Tool output, serialized as string to match OpenAI "tool" message content.
+   * Callers can choose to send JSON or plain text.
+   */
+  content: string;
 }
 
 /** @internal */
@@ -469,6 +511,7 @@ export interface ChatsErrorMessage {
 export type ClientToAgentMessage =
   | SessionStartMessage
   | SessionSendMessage
+  | ToolResultMessage
   | ChatsCreateMessage
   | ChatsListMessage
   | ChatsGetMessage
@@ -479,7 +522,7 @@ export type AgentToClientMessage =
   | ReadyMessage
   | SessionStartedMessage
   | SessionStreamMessage
-  | ToolCallPlaceholderMessage
+  | ToolCallMessage
   | SessionCompleteMessage
   | ChatsCreatedMessage
   | ChatsListResultMessage
