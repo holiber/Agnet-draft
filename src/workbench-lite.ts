@@ -24,9 +24,10 @@ import { z } from "zod";
  *   schema, validate feasibility for streaming + CLI, then migrate incrementally.
  */
 
-type Kind = "query" | "mutation";
+type UnaryKind = "query" | "mutation";
+type Kind = UnaryKind | "stream";
 
-export type Op<K extends Kind, I extends z.ZodTypeAny, O extends z.ZodTypeAny> =
+export type Op<K extends UnaryKind, I extends z.ZodTypeAny, O extends z.ZodTypeAny> =
   ((input: z.infer<I>) => Promise<z.infer<O>> | z.infer<O>) & {
     kind: K;
     input: I;
@@ -34,8 +35,18 @@ export type Op<K extends Kind, I extends z.ZodTypeAny, O extends z.ZodTypeAny> =
     meta?: Record<string, unknown>;
   };
 
+export type StreamOp<I extends z.ZodTypeAny, C extends z.ZodTypeAny> =
+  ((input: z.infer<I>) => AsyncIterable<z.infer<C>>) & {
+    kind: "stream";
+    input: I;
+    chunk: C;
+    meta?: Record<string, unknown>;
+  };
+
+type AnyOp = Op<any, any, any> | StreamOp<any, any>;
+
 const define =
-  <K extends Kind>(kind: K) =>
+  <K extends UnaryKind>(kind: K) =>
   <I extends z.ZodTypeAny, O extends z.ZodTypeAny>(
     input: I,
     output: O,
@@ -47,14 +58,27 @@ const define =
 export const query = define("query");
 export const mutate = define("mutation");
 
+export const stream = <I extends z.ZodTypeAny, C extends z.ZodTypeAny>(
+  input: I,
+  chunk: C,
+  handler: (i: z.infer<I>) => AsyncIterable<z.infer<C>>,
+  meta?: Record<string, unknown>
+): StreamOp<I, C> => Object.assign(handler, { kind: "stream" as const, input, chunk, meta });
+
 /** =========================
  *  Schema tree (what getApiSchema returns)
  *  ========================= */
 export type ApiSchemaNode =
   | {
-      kind: Kind;
+      kind: UnaryKind;
       input: z.ZodTypeAny;
       output: z.ZodTypeAny;
+      meta?: Record<string, unknown>;
+    }
+  | {
+      kind: "stream";
+      input: z.ZodTypeAny;
+      chunk: z.ZodTypeAny;
       meta?: Record<string, unknown>;
     }
   | { [key: string]: ApiSchemaNode };
@@ -65,9 +89,9 @@ type ModuleLike = {
   getApiSchema: () => ApiSchemaNode;
 };
 
-function isOp(x: unknown): x is Op<any, any, any> {
+function isOp(x: unknown): x is AnyOp {
   const y = x as any;
-  return typeof y === "function" && !!y.kind && !!y.input && !!y.output;
+  return typeof y === "function" && !!y.kind && !!y.input && (!!y.output || !!y.chunk);
 }
 
 function isModule(x: unknown): x is ModuleLike & { [WB_SCHEMA]: ApiSchemaNode } {
@@ -77,7 +101,10 @@ function isModule(x: unknown): x is ModuleLike & { [WB_SCHEMA]: ApiSchemaNode } 
 
 function buildSchema(node: any): ApiSchemaNode {
   if (isOp(node)) {
-    return { kind: node.kind, input: node.input, output: node.output, meta: node.meta };
+    if (node.kind === "stream") {
+      return { kind: "stream", input: node.input, chunk: (node as any).chunk, meta: node.meta };
+    }
+    return { kind: node.kind, input: node.input, output: (node as any).output, meta: node.meta };
   }
   if (isModule(node)) {
     return node.getApiSchema();
@@ -91,12 +118,14 @@ function buildSchema(node: any): ApiSchemaNode {
  *  module()
  *  ========================= */
 interface ApiDef {
-  [key: string]: Op<any, any, any> | ApiDef | ModuleLike;
+  [key: string]: AnyOp | ApiDef | ModuleLike;
 }
 
 type ApiFromDef<D> =
   D extends Op<any, infer I, infer O>
     ? (input: z.infer<I>) => Promise<z.infer<O>>
+    : D extends StreamOp<infer I, infer C>
+      ? (input: z.infer<I>) => AsyncIterable<z.infer<C>>
     : D extends ModuleLike
       ? D
     : D extends Record<string, any>
@@ -108,10 +137,23 @@ export function module<const D extends ApiDef>(def: D): ApiFromDef<D> & ModuleLi
 
   const buildRuntime = (node: any): any => {
     if (isOp(node)) {
+      if (node.kind === "stream") {
+        return (input: unknown) => {
+          const parsed = (node as any).input.parse(input);
+          const iter = (node as any)(parsed) as AsyncIterable<unknown>;
+          return (async function* () {
+            for await (const chunk of iter) {
+              yield (node as any).chunk.parse(chunk);
+            }
+          })();
+        };
+      }
+
       return async (input: unknown) => {
-        const parsed = node.input.parse(input);
-        const out = await node(parsed);
-        return node.output.parse(out);
+        const unary = node as Op<any, any, any>;
+        const parsed = unary.input.parse(input);
+        const out = await unary(parsed);
+        return unary.output.parse(out);
       };
     }
     if (isModule(node)) {
