@@ -1,6 +1,8 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
+import process from "node:process";
 
 import { StdioJsonTransport } from "./stdio-transport.js";
+import { assertCommandAllowed, sanitizeChildEnv } from "./internal/env-protection.js";
 
 export interface SpawnLocalAgentOptions {
   command: string;
@@ -18,10 +20,13 @@ export interface LocalAgentConnection {
 export function spawnLocalAgent(
   options: SpawnLocalAgentOptions
 ): LocalAgentConnection {
+  const parentEnv = options.env ?? process.env;
+  assertCommandAllowed({ command: options.command, env: parentEnv });
+
   const child = spawn(options.command, options.args, {
     stdio: ["pipe", "pipe", "pipe"],
     cwd: options.cwd,
-    env: options.env
+    env: sanitizeChildEnv(parentEnv)
   });
 
   const transport = new StdioJsonTransport(child.stdout, child.stdin);

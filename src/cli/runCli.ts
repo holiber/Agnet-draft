@@ -1,10 +1,12 @@
 import { existsSync } from "node:fs";
 import path from "node:path";
 import process from "node:process";
+import { createInterface } from "node:readline/promises";
 
 import { createApp, createAppContext } from "../app.js";
 import { flattenApiSchema } from "../internal/api-schema.js";
 import { toErrorMessage } from "../internal/utils.js";
+import { tokenizeCommandLine } from "./command-line.js";
 
 function endpointPathTokens(endpointId: string): string[] {
   return endpointId.split(".").filter(Boolean);
@@ -30,7 +32,14 @@ function usage(endpoints: CliEndpoint[]): string {
       .join(" ");
     lines.push(`  ${path}${args ? " " + args : ""}`);
   }
-  lines.push("", 'Notes:', '  - Use "--help" for this message.');
+  lines.push(
+    "",
+    "Global options:",
+    "  --interactive, -i  Start interactive mode",
+    "",
+    "Notes:",
+    '  - Use "--help" for this message.'
+  );
   return lines.join("\n");
 }
 
@@ -256,38 +265,30 @@ function getByPath(obj: any, pathTokens: string[]): unknown {
   return cur;
 }
 
-export async function runCli(argv: string[]): Promise<void> {
-  const entryPath = argv[1];
-  const mockAgentPathCandidate =
-    typeof entryPath === "string" && entryPath.length > 0
-      ? path.resolve(path.dirname(entryPath), "mock-agent.mjs")
-      : "";
-  const mockAgentPath = existsSync(mockAgentPathCandidate)
-    ? mockAgentPathCandidate
-    : path.resolve(process.cwd(), "bin", "mock-agent.mjs");
-  const ctx = createAppContext({ cwd: process.cwd(), env: process.env, mockAgentPath });
-  const app = createApp(ctx);
-  const endpoints = flattenApiSchema(app.getApiSchema());
-  const publicEndpoints = endpoints.filter((e) => !e.internal);
-  const tokens = argv.slice(2);
-
-  if (tokens.length === 0 || tokens.includes("--help") || tokens.includes("-h")) {
-    process.stdout.write(usage(publicEndpoints) + "\n");
+async function dispatchOnce(params: {
+  app: unknown;
+  endpoints: CliEndpoint[];
+  publicEndpoints: CliEndpoint[];
+  tokens: string[];
+  strictExitCode: boolean;
+}): Promise<void> {
+  if (params.tokens.length === 0 || params.tokens.includes("--help") || params.tokens.includes("-h")) {
+    process.stdout.write(usage(params.publicEndpoints) + "\n");
     return;
   }
 
-  const selected = selectEndpoint(endpoints, tokens);
+  const selected = selectEndpoint(params.endpoints, params.tokens);
   if (!selected) {
-    process.stderr.write(usage(publicEndpoints) + "\n");
-    process.exitCode = 1;
+    process.stderr.write(usage(params.publicEndpoints) + "\n");
+    if (params.strictExitCode) process.exitCode = 1;
     return;
   }
 
-  const argvAfterCommand = tokens.slice(selected.pathLen);
+  const argvAfterCommand = params.tokens.slice(selected.pathLen);
 
   try {
     const input = parseEndpointInput({ endpoint: selected.endpoint, argvAfterCommand });
-    const fn = getByPath(app as any, selected.endpoint.callPath);
+    const fn = getByPath(params.app as any, selected.endpoint.callPath);
     if (typeof fn !== "function") {
       throw new Error(`Handler method not found for endpoint "${selected.endpoint.id}"`);
     }
@@ -300,7 +301,91 @@ export async function runCli(argv: string[]): Promise<void> {
     }
   } catch (err) {
     process.stderr.write(toErrorMessage(err) + "\n");
-    process.exitCode = 1;
+    if (params.strictExitCode) process.exitCode = 1;
   }
+}
+
+async function runInteractive(params: {
+  app: unknown;
+  endpoints: CliEndpoint[];
+  publicEndpoints: CliEndpoint[];
+  initialTokens?: string[];
+}): Promise<void> {
+  const rl = createInterface({
+    input: process.stdin,
+    output: process.stdout,
+    terminal: true
+  });
+
+  process.stdout.write('Agnet interactive mode. Type "help" (or "?") for commands, "exit" to quit.\n');
+
+  try {
+    if (params.initialTokens && params.initialTokens.length > 0) {
+      await dispatchOnce({
+        app: params.app,
+        endpoints: params.endpoints,
+        publicEndpoints: params.publicEndpoints,
+        tokens: params.initialTokens,
+        strictExitCode: false
+      });
+    }
+
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      let line: string;
+      try {
+        line = await rl.question("agnet> ");
+      } catch {
+        break; // stdin closed
+      }
+
+      const trimmed = line.trim();
+      if (!trimmed) continue;
+
+      if (trimmed === "exit" || trimmed === "quit") break;
+      if (trimmed === "help" || trimmed === "?") {
+        process.stdout.write(usage(params.publicEndpoints) + "\n");
+        continue;
+      }
+
+      let tokens = tokenizeCommandLine(trimmed);
+      if (tokens[0] === "agnet") tokens = tokens.slice(1);
+
+      await dispatchOnce({
+        app: params.app,
+        endpoints: params.endpoints,
+        publicEndpoints: params.publicEndpoints,
+        tokens,
+        strictExitCode: false
+      });
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+export async function runCli(argv: string[]): Promise<void> {
+  const entryPath = argv[1];
+  const mockAgentPathCandidate =
+    typeof entryPath === "string" && entryPath.length > 0 ? path.resolve(path.dirname(entryPath), "mock-agent.mjs") : "";
+  const mockAgentPath = existsSync(mockAgentPathCandidate)
+    ? mockAgentPathCandidate
+    : path.resolve(process.cwd(), "bin", "mock-agent.mjs");
+
+  const ctx = createAppContext({ cwd: process.cwd(), env: process.env, mockAgentPath });
+  const app = createApp(ctx);
+  const endpoints = flattenApiSchema(app.getApiSchema());
+  const publicEndpoints = endpoints.filter((e) => !e.internal);
+
+  const rawTokens = argv.slice(2);
+  const interactive = rawTokens.includes("--interactive") || rawTokens.includes("-i");
+  const tokens = rawTokens.filter((t) => t !== "--interactive" && t !== "-i");
+
+  if (interactive) {
+    await runInteractive({ app, endpoints, publicEndpoints, initialTokens: tokens.length > 0 ? tokens : undefined });
+    return;
+  }
+
+  await dispatchOnce({ app, endpoints, publicEndpoints, tokens, strictExitCode: true });
 }
 
