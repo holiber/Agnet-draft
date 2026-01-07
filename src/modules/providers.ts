@@ -19,6 +19,18 @@ export const providers = module((ctx: ProvidersModuleContext) => {
         }),
         async (input) => {
           return await impl.list(input?.json);
+        },
+        {
+          id: "providers.list",
+          pattern: "unary",
+          args: [
+            {
+              name: "json",
+              type: "boolean",
+              required: false,
+              cli: { flag: "--json" }
+            }
+          ]
         }
       ),
 
@@ -27,6 +39,24 @@ export const providers = module((ctx: ProvidersModuleContext) => {
         z.object({ provider: z.any() }),
         async ({ providerId, json }) => {
           return await impl.describe(providerId, json);
+        },
+        {
+          id: "providers.describe",
+          pattern: "unary",
+          args: [
+            {
+              name: "providerId",
+              type: "string",
+              required: true,
+              cli: { positionalIndex: 0 }
+            },
+            {
+              name: "json",
+              type: "boolean",
+              required: false,
+              cli: { flag: "--json" }
+            }
+          ]
         }
       ),
 
@@ -54,6 +84,18 @@ export const providers = module((ctx: ProvidersModuleContext) => {
             input?.apiKeyEnv,
             input?.headerEnv
           );
+        },
+        {
+          id: "providers.register",
+          pattern: "unary",
+          args: [
+            { name: "files", type: "string[]", required: false, cli: { flag: "--files", repeatable: true } },
+            { name: "file", type: "string", required: false, cli: { flag: "--file" } },
+            { name: "json", type: "string", required: false, cli: { flag: "--json" } },
+            { name: "bearerEnv", type: "string", required: false, cli: { flag: "--bearer-env" } },
+            { name: "apiKeyEnv", type: "string", required: false, cli: { flag: "--api-key-env" } },
+            { name: "headerEnv", type: "string[]", required: false, cli: { flag: "--header-env", repeatable: true } }
+          ]
         }
       )
     }

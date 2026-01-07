@@ -17,6 +17,14 @@ export const shortcuts = module((ctx: ShortcutsModuleContext) => {
         z.string(),
         async ({ prompt, providerId }) => {
           return await impl.ask(prompt, providerId);
+        },
+        {
+          id: "ask",
+          pattern: "unary",
+          args: [
+            { name: "prompt", type: "string", required: true, cli: { positionalIndex: 0 } },
+            { name: "providerId", type: "string", required: false, cli: { flag: "--provider" } }
+          ]
         }
       ),
 
@@ -30,6 +38,14 @@ export const shortcuts = module((ctx: ShortcutsModuleContext) => {
         }),
         async ({ prompt, providerId }) => {
           return await impl.prompt(prompt, providerId);
+        },
+        {
+          id: "prompt",
+          pattern: "unary",
+          args: [
+            { name: "prompt", type: "string", required: true, cli: { positionalIndex: 0 } },
+            { name: "providerId", type: "string", required: false, cli: { flag: "--provider" } }
+          ]
         }
       )
     }

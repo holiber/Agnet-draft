@@ -18,13 +18,28 @@ export const chats = module((ctx: ChatsModuleContext) => {
 
   return {
     api: {
-      health: query(z.undefined(), z.literal("ok"), async () => "ok" as const),
+      health: query(z.undefined(), z.literal("ok"), async () => "ok" as const, {
+        id: "internal.health",
+        internal: true
+      }),
 
       create: mutate(
         z.object({ providerId: z.string().optional() }).optional(),
         z.string(),
         async (input) => {
           return await impl.create(input?.providerId);
+        },
+        {
+          id: "chats.create",
+          pattern: "unary",
+          args: [
+            {
+              name: "providerId",
+              type: "string",
+              required: false,
+              cli: { flag: "--provider" }
+            }
+          ]
         }
       ),
 
@@ -34,12 +49,46 @@ export const chats = module((ctx: ChatsModuleContext) => {
         async function* ({ chatId, prompt }) {
           yield* impl.send(chatId, prompt);
         },
-        { transport: "serverStream" }
+        {
+          transport: "serverStream",
+          id: "chats.send",
+          pattern: "serverStream",
+          args: [
+            {
+              name: "chatId",
+              type: "string",
+              required: true,
+              cli: { flag: "--chat", aliases: ["--task", "--session"] }
+            },
+            {
+              name: "prompt",
+              type: "string",
+              required: true,
+              cli: { flag: "--prompt" }
+            }
+          ]
+        }
       ),
 
-      close: mutate(z.object({ chatId: z.string() }), z.literal("ok"), async ({ chatId }) => {
-        return (await impl.close(chatId)) as "ok";
-      })
+      close: mutate(
+        z.object({ chatId: z.string() }),
+        z.literal("ok"),
+        async ({ chatId }) => {
+          return (await impl.close(chatId)) as "ok";
+        },
+        {
+          id: "chats.close",
+          pattern: "unary",
+          args: [
+            {
+              name: "chatId",
+              type: "string",
+              required: true,
+              cli: { flag: "--chat", aliases: ["--task", "--session"] }
+            }
+          ]
+        }
+      )
     }
   };
 });
