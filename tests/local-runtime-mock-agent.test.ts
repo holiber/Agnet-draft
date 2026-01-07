@@ -5,7 +5,7 @@ import type {
   AgentToClientMessage,
   SessionCompleteMessage,
   SessionStreamMessage,
-  ToolCallPlaceholderMessage
+  ToolCallMessage
 } from "../src/protocol.js";
 import { spawnLocalAgent } from "../src/local-runtime.js";
 
@@ -162,10 +162,15 @@ describe("local runtime + mock-agent integration", () => {
       while (!sawComplete) {
         const msg = await nextMessage(iter, "tool call and completion");
         if (msg.type === "tool/call") {
-          const tool = msg as ToolCallPlaceholderMessage;
+          const tool = msg as ToolCallMessage;
           sawToolCall = true;
-          expect(tool.name).toBe("mock.tool");
           expect(tool.sessionId).toBe("s-tool");
+          expect(tool.toolCall.type).toBe("function");
+          expect(tool.toolCall.function.name).toBe("mock.tool");
+          expect(JSON.parse(tool.toolCall.function.arguments)).toMatchObject({
+            turn: 1,
+            inputLength: 2
+          });
         }
         if (msg.type === "session/complete") sawComplete = true;
       }
