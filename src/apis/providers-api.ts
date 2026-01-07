@@ -43,6 +43,13 @@ function requireCliRuntime(providerId: string, runtime: AgentRuntimeConfig): Ext
   return runtime;
 }
 
+function isMarkedDefaultAgent(agent: AgentCard): boolean {
+  const ext = agent.extensions as unknown;
+  if (!ext || typeof ext !== "object" || Array.isArray(ext)) return false;
+  const obj = ext as Record<string, unknown>;
+  return obj.default === true || obj.isDefault === true;
+}
+
 export class ProvidersApi {
   constructor(private readonly ctx: ProvidersApiContext) {}
 
@@ -73,6 +80,31 @@ export class ProvidersApi {
     const found = registry.providers.find((a) => a?.agent?.id === providerId);
     if (!found) throw new Error(`Unknown provider: ${providerId}`);
     return validateAgentConfig(found);
+  }
+
+  /**
+   * Deterministic default provider selection:
+   * - if a provider is explicitly marked default (via `agent.extensions.default` or `agent.extensions.isDefault`) use it
+   * - otherwise, use the last registered provider (by registry order)
+   * - if none are registered, fall back to the last built-in provider (currently: mock-agent)
+   */
+  async resolveDefaultProviderId(explicitProviderId?: string): Promise<string> {
+    if (typeof explicitProviderId === "string" && explicitProviderId.trim().length > 0) {
+      const resolved = await this.resolveProvider(explicitProviderId);
+      return resolved.agent.id;
+    }
+
+    const registry = await readProvidersRegistry(this.ctx.cwd);
+    const persisted = registry.providers.map((a) => validateAgentConfig(a));
+    const builtIns = this.getBuiltInProviders();
+
+    const defaults = [...builtIns, ...persisted].filter((p) => isMarkedDefaultAgent(p.agent));
+    if (defaults.length > 0) return defaults[defaults.length - 1].agent.id;
+
+    if (persisted.length > 0) return persisted[persisted.length - 1].agent.id;
+    if (builtIns.length > 0) return builtIns[builtIns.length - 1].agent.id;
+
+    throw new Error("No providers available");
   }
 
   @Api.endpoint("providers.list")

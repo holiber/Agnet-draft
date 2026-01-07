@@ -45,6 +45,42 @@ export interface Chat {
   saveToFile: (path: string) => Promise<void>;
 }
 
+/**
+ * Unified request input for Agnet's primary entrypoints:
+ * - agnet.ask(request)
+ * - agnet.prompt(request)
+ * - agnet.chats.create(request)
+ */
+export type TAgentRequest =
+  | string
+  | {
+      providerId?: string;
+      prompt: string;
+    };
+
+export type AgentResult = {
+  text: string;
+  chatId: string;
+  providerId: string;
+  agentId: string;
+  history: ChatMessage[];
+};
+
+export interface ChatExecution {
+  /**
+   * Underlying chat session created for this request.
+   *
+   * Note: `Chat.send()` is multi-turn. `ChatExecution.response()/result()` refer to the initial request.
+   */
+  chat: Chat;
+
+  /** Human-oriented output (text only). */
+  response: () => Promise<string>;
+
+  /** Structured output (metadata + history). */
+  result: () => Promise<AgentResult>;
+}
+
 type PersistedChatV1 = {
   version: 1;
   providerId: string;
@@ -62,6 +98,30 @@ function requireCliRuntime(runtime: AgentRuntimeConfig): Extract<AgentRuntimeCon
 
 function isNonEmptyString(x: unknown): x is string {
   return typeof x === "string" && x.trim().length > 0;
+}
+
+function coerceAgentRequest(input: TAgentRequest): { providerId?: string; prompt: string } {
+  if (typeof input === "string") {
+    if (!isNonEmptyString(input)) throw new Error("Request prompt must be a non-empty string");
+    return { prompt: input };
+  }
+  if (!input || typeof input !== "object") throw new Error("Invalid request: expected string or { prompt, providerId? }");
+  const prompt = (input as { prompt?: unknown }).prompt;
+  if (!isNonEmptyString(prompt)) throw new Error("Invalid request.prompt: expected non-empty string");
+  const providerIdRaw = (input as { providerId?: unknown }).providerId;
+  const providerId = providerIdRaw === undefined ? undefined : isNonEmptyString(providerIdRaw) ? providerIdRaw : undefined;
+  return { prompt, providerId };
+}
+
+function stripTrailingNewlineOnce(text: string): string {
+  return text.endsWith("\n") ? text.slice(0, -1) : text;
+}
+
+function isMarkedDefaultProvider(provider: ProviderRef): boolean {
+  const ext = provider.card.extensions as unknown;
+  if (!ext || typeof ext !== "object" || Array.isArray(ext)) return false;
+  const obj = ext as Record<string, unknown>;
+  return obj.default === true || obj.isDefault === true;
 }
 
 async function runTaskSend(params: {
@@ -166,6 +226,40 @@ class TaskBackedChat implements Chat {
   }
 }
 
+class TaskBackedChatExecution implements ChatExecution {
+  readonly chat: Chat;
+  private readonly provider: ProviderRef;
+  private readonly chatId: string;
+  private readonly cwd: string;
+  private readonly responsePromise: Promise<string>;
+
+  constructor(opts: { cwd: string; provider: ProviderRef; chatId: string; prompt: string }) {
+    this.cwd = opts.cwd;
+    this.provider = opts.provider;
+    this.chatId = opts.chatId;
+    this.chat = new TaskBackedChat({ cwd: opts.cwd, provider: opts.provider, chatId: opts.chatId });
+    this.responsePromise = this.chat.send(opts.prompt);
+  }
+
+  async response(): Promise<string> {
+    const text = await this.responsePromise;
+    return stripTrailingNewlineOnce(text);
+  }
+
+  async result(): Promise<AgentResult> {
+    const text = await this.response();
+    const persisted = await readChat(this.cwd, this.chatId);
+    const history = Array.isArray(persisted.history) ? (persisted.history as ChatMessage[]) : [];
+    return {
+      text,
+      chatId: this.chatId,
+      providerId: this.provider.id,
+      agentId: this.provider.id,
+      history
+    };
+  }
+}
+
 export class Agnet {
   private readonly cwd: string;
   private readonly env: NodeJS.ProcessEnv;
@@ -195,6 +289,8 @@ export class Agnet {
   readonly providers: ProvidersRegistry = {
     register: (input, opts) => {
       const ref = registerProvider(input, { ...opts, env: opts?.env ?? this.env });
+      // Keep deterministic ordering: last registration wins for default selection.
+      if (this.providersById.has(ref.id)) this.providersById.delete(ref.id);
       this.providersById.set(ref.id, ref);
 
       // Persist only when a full AgentConfig is provided (or loadable from file/json).
@@ -231,6 +327,26 @@ export class Agnet {
     list: () => [...this.providersById.values()]
   };
 
+  /**
+   * Human-style API sugar.
+   *
+   * Syntax sugar for: `await (await agnet.chats.create(request)).response()`
+   */
+  async ask(request: TAgentRequest): Promise<string> {
+    const chat = await this.chats.create(request);
+    return await chat.response();
+  }
+
+  /**
+   * Computer-style API sugar.
+   *
+   * Syntax sugar for: `await (await agnet.chats.create(request)).result()`
+   */
+  async prompt(request: TAgentRequest): Promise<AgentResult> {
+    const chat = await this.chats.create(request);
+    return await chat.result();
+  }
+
   readonly chats = {
     /**
      * Tier1: providers without remote chat listing should return [].
@@ -240,11 +356,27 @@ export class Agnet {
       return [];
     },
 
-    create: async (opts?: { providerId?: string }): Promise<Chat> => {
+    /**
+     * Creates a multi-turn chat session (no prompt is sent).
+     *
+     * Note: This is separate from `chats.create(request)` which executes a request immediately.
+     */
+    open: async (opts?: { providerId?: string }): Promise<Chat> => {
       const provider = this.resolveDefaultProvider(opts?.providerId);
       const chatId = randomId("chat");
       await writeChat(this.cwd, chatId, { version: 1, chatId, providerId: provider.id, history: [] });
       return new TaskBackedChat({ cwd: this.cwd, provider, chatId });
+    },
+
+    /**
+     * Core primitive: create a chat and execute a request through a provider.
+     */
+    create: async (request: TAgentRequest): Promise<ChatExecution> => {
+      const { providerId, prompt } = coerceAgentRequest(request);
+      const provider = this.resolveDefaultProvider(providerId);
+      const chatId = randomId("chat");
+      await writeChat(this.cwd, chatId, { version: 1, chatId, providerId: provider.id, history: [] });
+      return new TaskBackedChatExecution({ cwd: this.cwd, provider, chatId, prompt });
     },
 
     loadFromFile: async (path: string): Promise<Chat> => {
@@ -322,9 +454,14 @@ export class Agnet {
 
     const all = this.providers.list();
     if (all.length === 0) {
-      throw new Error('No providers registered. Register one via "an.providers.register(...)" first.');
+      throw new Error('No providers registered. Register one via "agnet.providers.register(...)" first.');
     }
-    return all[0];
+
+    // Deterministic default:
+    // 1) provider explicitly marked as default (if supported)
+    // 2) otherwise — last registered provider
+    const defaults = all.filter(isMarkedDefaultProvider);
+    return defaults.length > 0 ? defaults[defaults.length - 1] : all[all.length - 1];
   }
 }
 

@@ -34,7 +34,7 @@ export class ChatsApi {
     @Api.arg({ name: "providerId", type: "string", cli: { flag: "--provider" } })
     providerId?: string
   ): Promise<string> {
-    const resolvedProviderId = providerId ?? "mock-agent";
+    const resolvedProviderId = await this.providers.resolveDefaultProviderId(providerId);
     const chatId = randomId("chat");
     await writeChat(this.ctx.cwd, chatId, { version: 1, chatId, providerId: resolvedProviderId, history: [] });
     return chatId;

@@ -16,7 +16,7 @@ describe("Agnet.chats", () => {
       runtime: { transport: "cli", command: process.execPath, args: [mockAgentPath] }
     });
 
-    const chat = await an.chats.create({ providerId: "mock-agent" });
+    const chat = await an.chats.open({ providerId: "mock-agent" });
     const out = await chat.send("hello");
     expect(out).toBe("MockAgent response #1: hello\n");
 

@@ -25,6 +25,7 @@ async function loadProfileModules(profile: string): Promise<void> {
   void profile;
   await import("../apis/providers-api.js");
   await import("../apis/chats-api.js");
+  await import("../apis/shortcuts-api.js");
 }
 
 function isInternalEndpointId(id: string): boolean {
