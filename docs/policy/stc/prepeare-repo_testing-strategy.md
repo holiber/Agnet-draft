@@ -116,6 +116,13 @@ A fast and reliable **sanity check** of key user scenarios.
 
 **Console output:**
 
+When all test succeeded
+```
+passed X/Y in Zs
+```
+
+
+When at least one test failed
 ```
 passed X/Y in Zs
 FAILED: <file> :: <test name>
