@@ -234,6 +234,10 @@ title: Backend Autocode Agent
 roles: [coder]
 allow: [fs, tool, sh:gh]
 deny: [network]
+recommended:
+  models:
+    - GPT-5.2
+    - Grok Code
 limits:
   time_per_message: 5m
   max_files_changed: 100
