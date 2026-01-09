@@ -27,6 +27,8 @@ The repo should have next commands for test running in the package.json
 
 ```
 
+Also the repo requires some helper files to run these tests
+
 ## utils
 ```ts
 // tests/test-utils.ts
