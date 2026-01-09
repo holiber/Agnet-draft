@@ -1,9 +1,11 @@
 ---
-version: 0.2.0
+version: 0.3.0
 icon: 🤖
 title: Agent File Format
-description: Defines the required format, metadata, and execution rules for AI agent definition files.
+description: Defines the required format, metadata, commands, tools, and execution rules for AI agent definition files.
 ---
+
+contributing_agents_file_format.md
 
 Purpose
 
@@ -68,6 +70,17 @@ status
 	•	deprecated
 	•	disabled
 
+templateEngine
+	•	Enables template rendering for some text fields using the agent context (ctx)
+	•	Default: hbs
+	•	Disable templating by setting to ""
+	•	Template rendering is applied by the runtime (not by this policy)
+
+input
+	•	Optional initial runtime input for the agent
+	•	This value is provided to ctx.input at start
+	•	Default: empty
+
 recommended
 	•	Non-mandatory guidance
 	•	Supported fields:
@@ -83,6 +96,40 @@ Supported fields:
 	•	startup — name of a tool that must be executed successfully before the agent starts
 
 Default: empty
+
+commands
+Defines Cursor-style commands supported by this agent.
+
+commands is a list. Each list item is one of:
+	1.	Local path (file or folder)
+	2.	Remote URL (file or folder)
+	3.	Inline command definition object
+
+Examples:
+
+commands:
+  - ./commands
+  - ./commands/test.md
+  - https://example.com/commands/
+  - https://example.com/commands/test.md
+  - name: test
+    description: Generates unit tests for a specific function or file.
+    argument-hint: [target-name] [framework]
+    body: |
+      Create unit tests for $1 using the $2 framework.
+      Ensure the tests cover edge cases and follow our project style.
+
+Inline command fields:
+	•	name (required for inline commands)
+	•	description (required)
+	•	body (required)
+	•	argument-hint (optional; string or list)
+
+Command substitution rules:
+	•	$1, $2, … are positional arguments
+	•	$ARGUMENTS is all arguments joined by spaces
+
+If a referenced positional argument is missing, the runtime must treat the invocation as invalid.
 
 ⸻
 
@@ -105,12 +152,12 @@ Tools are defined only in the Markdown body under the following heading:
 
 Rules:
 	•	Tool code must be written in JavaScript
-	•	Tools must be returned as an object:
+	•	The code must return an object:
 
 { [toolName]: { fn, scheme } }
 
 
-	•	scheme must follow the OpenAI tool (function) format
+	•	scheme must follow the OpenAI tool (function) format (simplified)
 	•	Tool names are case-insensitive
 	•	Tool names must match required.startup exactly (case-insensitive) when used there
 
@@ -199,79 +246,7 @@ General Rules
 	•	Agents must stop on ambiguity
 	•	If validation fails, the agent must not run
 
+⸻
 
-## Example of an agent that checks that api tocken is working on startup
-'''md
----
-version: 0.1.0
-status: active
-icon: 🧭
-title: Policy Auditor Agent
-description: Audits policy files, builds index files, and suggests minimal fixes.
-
-recommended:
-  models:
-    - GPT-5.2
-    - Grok Code
-
-required:
-  startup: test_openai_api_key
-  env:
-    - OPENAI_API_KEY
----
-# Policy Auditor Agent
-
-This agent scans policy and agent files, detects inconsistencies, builds index files, and proposes minimal, deterministic changes.
-
-## System
-You are a governance-focused AI agent. Prefer the smallest possible change. Do not invent new policies. If something is unclear or missing, report it instead of guessing.
-
-## Rules
-- Treat policies as contracts, not recommendations by default
-- Prefer proposals over direct edits
-- Keep changes minimal and reviewable
-
-## Tools
-```js
-async function testOpenapiKey(_args, { env, fetch }) {
-  const apiKey = env?.OPENAI_API_KEY;
-  if (!apiKey) {
-    throw new Error("Missing required env var: OPENAI_API_KEY");
-  }
-
-  const res = await fetch("https://api.openai.com/v1/models", {
-    method: "GET",
-    headers: {
-      Authorization: `Bearer ${apiKey}`,
-      "Content-Type": "application/json",
-    },
-  });
-
-  if (!res.ok) {
-    const text = await res.text().catch(() => "n/a");
-    throw new Error(
-      `OPENAI_API_KEY validation failed: ${res.status} ${res.statusText} :: ${text}`
-    );
-  }
-
-  return { ok: true };
-}
-
-const scheme = {
-  name: "test_openai_api_key",
-  description: "Validates OPENAI_API_KEY by calling a cheap OpenAI endpoint.",
-  parameters: {
-    type: "object",
-    properties: {},
-    additionalProperties: false,
-  },
-};
-
-return {
-  test_openai_api_key: {
-    fn: testOpenapiKey,
-    scheme,
-  },
-};
-'''
+This policy defines the authoritative contract for agent definition files.
 
