@@ -1,25 +1,19 @@
 ---
 version: 0.2.0
 icon: 🤖
-tags:
-  - agents
-  - governance
-  - configuration
 title: Agent File Format
-description: Defines the required format, defaults, and security model for .agent.md files.
+description: Defines the required format, metadata, and execution rules for AI agent definition files.
 ---
-
-contributing_agents_file_format.md
 
 Purpose
 
-This policy defines the format of AI agent definition files stored in the agents/ folder inside the policies directory.
+This policy defines the format and rules for AI agent definition files located in the agents/ folder.
 
-Its goal is to make agent configuration:
-	•	Standardized
+Its goal is to make agent behavior:
 	•	Explicit
-	•	Easy to load by humans and tools
-	•	Safe and deterministic for AI execution
+	•	Deterministic
+	•	Machine-readable
+	•	Safe to execute
 
 ⸻
 
@@ -29,35 +23,24 @@ This policy applies to files with the following naming pattern:
 
 agents/<category>_<agent-name>.agent.md
 
-Example:
-
-agents/frontend_ui-tester.agent.md
-agents/backend_api-coder.agent.md
-
 
 ⸻
 
 File Structure
 
-An agent file is a Markdown document with the following structure:
-	1.	Optional YAML metadata header
-	2.	Markdown body
+An agent file is a Markdown document with:
+	1.	An optional YAML metadata header
+	2.	A Markdown body
 
-Only specific Markdown headings are allowed to act as metadata keys (see below).
-All other headings are treated as plain documentation.
-
-⸻
-
-Optional YAML Metadata
-
-If present, the YAML metadata must be the first block in the file.
-
-Metadata is optional.
-If a field is missing, defaults apply.
-
-Metadata must not contradict the Markdown body.
+If metadata is missing, defaults apply.
 
 ⸻
+
+Metadata (Optional, YAML)
+
+If present, metadata must be the first block in the file.
+
+Metadata keys are case-insensitive.
 
 Supported Metadata Fields & Defaults
 
@@ -65,207 +48,230 @@ version
 	•	Version of the agent definition
 	•	Default: 0.1.0
 
-⸻
-
 icon
 	•	Single emoji
 	•	Default: 🤖
-
-⸻
 
 title
 	•	Human-readable agent name
 	•	Default: the first top-level heading (# ...) in the file
 
-⸻
-
 description
-	•	Short agent summary
+	•	Short summary of the agent
 	•	Default: the first paragraph after the first top-level heading
 
-⸻
-
-tags
-	•	List of strings for search and grouping
-	•	Default: empty list
-
-⸻
-
-roles
-	•	List of agent roles (e.g. planner, coder, reviewer)
-	•	Default: empty list
-
-⸻
-
-avatar
-	•	Avatar image reference
-	•	Default resolution order:
-	1.	First image under # Avatar heading
-	2.	First image at the start of the markdown body
-	3.	Not set
-
-⸻
-
-system
-	•	System message for the agent
-	•	Default resolution order:
-	1.	Content under ## System heading (if exists)
-	2.	description metadata (if exists)
-	3.	title
-
-⸻
-
-recommended
-	•	Non-mandatory guidance for the agent
-	•	Supported fields:
-	•	models
-	•	capabilities
-	•	Default: empty object
-
-⸻
-
-required
-	•	Mandatory requirements for the agent
-	•	Supported fields:
-	•	models
-	•	capabilities
-	•	Default: empty object
-
-⸻
-
-allow
-	•	Whitelist of allowed abilities
-	•	Default: * (all abilities allowed)
-	•	"" or false means no abilities allowed
-
-⸻
-
-deny
-	•	Blacklist of forbidden abilities
-	•	Default: empty
-	•	deny always overrides allow
-
-⸻
-
-limits
-	•	Hard execution limits
-	•	Default values:
-	•	time_per_message: 5 minutes
-	•	max_files_changed: 100
-
-⸻
-
 status
-	•	Lifecycle status of the agent
+	•	Lifecycle state of the agent
 	•	Default: active
-	•	Supported values:
+	•	Allowed values:
 	•	active
 	•	deprecated
 	•	disabled
 
+recommended
+	•	Non-mandatory guidance
+	•	Supported fields:
+	•	models
+	•	capabilities
+	•	Default: empty
+
+required
+	•	Mandatory requirements for the agent
+
+Supported fields:
+	•	env — list of required environment variables
+	•	startup — name of a tool that must be executed successfully before the agent starts
+
+Default: empty
+
 ⸻
 
-rules
-	•	Explicit rules for the agent
-	•	Default value:
+Startup Requirements
+
+If required.startup is defined:
+	•	The referenced tool must exist in the ## Tools section
+	•	The tool must execute successfully before the agent performs any work
+	•	If the tool fails:
+	•	The agent must not start
+	•	The failure must be reported
+
+⸻
+
+Tools Definition
+
+Tools are defined only in the Markdown body under the following heading:
+
+## Tools
+
+Rules:
+	•	Tool code must be written in JavaScript
+	•	Tools must be returned as an object:
+
+{ [toolName]: { fn, scheme } }
+
+
+	•	scheme must follow the OpenAI tool (function) format
+	•	Tool names are case-insensitive
+	•	Tool names must match required.startup exactly (case-insensitive) when used there
+
+⸻
+
+OpenAI Tool Scheme (Simplified)
+
+Each tool must define a scheme with:
+	•	name
+	•	description
+	•	parameters (JSON Schema)
+
+Example shape:
+
+const scheme = {
+  name: "tool_name",
+  description: "...",
+  parameters: { ... }
+};
+
+
+⸻
+
+Metadata vs Heading Resolution
+
+Only the following Markdown headings are allowed to act as metadata sources:
+	•	# <Title> → title
+	•	First paragraph after # <Title> → description
+	•	# Avatar → avatar (first image)
+	•	## System → system
+	•	## Rules → rules
+
+All comparisons are case-insensitive.
+
+Conflict Rules
+
+The loader must throw an error if:
+	•	A value is defined both in YAML metadata and via a heading
+	•	And the values are different (ignoring case and surrounding whitespace)
+
+⸻
+
+System Message Resolution
+
+The system message is resolved in this order:
+	1.	Content under ## System heading
+	2.	description metadata
+	3.	title
+
+⸻
+
+Rules Resolution
+
+Rules are resolved as:
 	•	Content under ## Rules heading (if present)
 	•	Otherwise empty
 
 ⸻
 
-policies
-	•	List of policies the agent must load and follow
-	•	Default: empty
-	•	Supported formats:
-	•	Local policy name (e.g. contributing_ai_codingworkflow.md)
-	•	Wildcards (e.g. contributing_ai_*)
-	•	URL to a policy file
+Abilities (Optional Extension)
+
+If abilities are supported by the runtime:
+	•	Abilities must be validated
+	•	Allowed base abilities:
+
+fs, network, sh, tool, mcp, browser, env
+
+
+	•	Scoped abilities are allowed only in the form:
+
+sh:<command>
+
+
+	•	Ability names are case-insensitive
+
+If both allow and deny lists are supported:
+	•	deny always overrides allow
+	•	Any overlap between allow and deny must throw an error
 
 ⸻
 
-Abilities
+General Rules
+	•	Metadata must not change the meaning of the agent body
+	•	Defaults must keep files minimal
+	•	Startup checks are hard gates
+	•	Agents must stop on ambiguity
+	•	If validation fails, the agent must not run
 
-Abilities define what an agent is allowed to do.
 
-Supported Abilities
-
-Base abilities:
-	•	fs — filesystem access
-	•	network — network access
-	•	sh — shell commands
-	•	tool — tool calls
-	•	MCP — MCP capabilities
-	•	browser — browser interaction
-	•	env — environment inspection
-
-⸻
-
-Scoped Abilities
-
-Abilities may be scoped.
-
-Examples:
-	•	sh:gh — allow calling gh
-	•	sh:ls — allow calling ls
-
-Rules:
-	•	Scoped permissions override unscoped defaults
-	•	Scoped denies override scoped allows
-
-⸻
-
-Markdown Headings as Metadata Keys
-
-Only the following Markdown headings are allowed to act as metadata sources:
-	•	# <Title> → title
-	•	First paragraph after # <Title> → description
-	•	# Avatar → avatar
-	•	## System → system
-	•	## Rules → rules
-
-All other headings are treated as documentation only.
-
-⸻
-
-Minimal Example Agent File
-
+## Example of an agent that checks that api tocken is working on startup
+'''md
 ---
-title: Backend Autocode Agent
-roles: [coder]
-allow: [fs, tool, sh:gh]
-deny: [network]
+version: 0.1.0
+status: active
+icon: 🧭
+title: Policy Auditor Agent
+description: Audits policy files, builds index files, and suggests minimal fixes.
+
 recommended:
   models:
     - GPT-5.2
     - Grok Code
-limits:
-  time_per_message: 5m
-  max_files_changed: 100
-policies:
-  - contributing_issue_codingworkflow.md
-  - contributing_ai_codingworkflow.md
+
+required:
+  startup: test_openai_api_key
+  env:
+    - OPENAI_API_KEY
 ---
+# Policy Auditor Agent
 
-# Backend Autocode Agent
-
-This agent implements small backend changes safely and incrementally.
+This agent scans policy and agent files, detects inconsistencies, builds index files, and proposes minimal, deterministic changes.
 
 ## System
-Follow all coding and AI workflow policies strictly.
+You are a governance-focused AI agent. Prefer the smallest possible change. Do not invent new policies. If something is unclear or missing, report it instead of guessing.
 
 ## Rules
-- Keep changes minimal
-- Add or update tests
-- Stop and mark `help needed` if blocked
+- Treat policies as contracts, not recommendations by default
+- Prefer proposals over direct edits
+- Keep changes minimal and reviewable
 
+## Tools
+```js
+async function testOpenapiKey(_args, { env, fetch }) {
+  const apiKey = env?.OPENAI_API_KEY;
+  if (!apiKey) {
+    throw new Error("Missing required env var: OPENAI_API_KEY");
+  }
 
-⸻
+  const res = await fetch("https://api.openai.com/v1/models", {
+    method: "GET",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+  });
 
-General Principles
-	•	Defaults must keep agent files short
-	•	Explicit metadata overrides inferred values
-	•	deny always wins over allow
-	•	Agents must stop when limits are exceeded
-	•	If behavior is ambiguous, the agent must not proceed
+  if (!res.ok) {
+    const text = await res.text().catch(() => "n/a");
+    throw new Error(
+      `OPENAI_API_KEY validation failed: ${res.status} ${res.statusText} :: ${text}`
+    );
+  }
 
-⸻
+  return { ok: true };
+}
+
+const scheme = {
+  name: "test_openai_api_key",
+  description: "Validates OPENAI_API_KEY by calling a cheap OpenAI endpoint.",
+  parameters: {
+    type: "object",
+    properties: {},
+    additionalProperties: false,
+  },
+};
+
+return {
+  test_openai_api_key: {
+    fn: testOpenapiKey,
+    scheme,
+  },
+};
+'''
+
