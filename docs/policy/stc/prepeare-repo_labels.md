@@ -139,6 +139,19 @@ Rules:
 
 ⸻
 
+
+ainotes
+
+Issue with this label used as an memory for the main Orchestrator AI agent. That agent use this memory to keep some state between his runs in github actions.
+
+There should be ONLY ONE issue with that label.
+
+
+⸻
+
+
+
+
 ⚙️ Programmatic Label Management (GitHub API)
 
 Create a Label
